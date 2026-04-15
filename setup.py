@@ -87,7 +87,7 @@ class SetupApp:
         steps_container = tk.Frame(self.root, bg=BG)
         steps_container.pack(fill="x", padx=24, pady=(12, 6))
         self.step_labels = []
-        for step in ["בדיקת Python", "התקנת חבילות", "בדיקת Node.js (יוטיוב)", "שמירת מפתח (מוצפן)", "כתיבת קבצי אפליקציה"]:
+        for step in ["בדיקת Python", "התקנת חבילות", "בדיקת Node.js (יוטיוב)", "שמירת מפתח (מוצפן)", "כתיבת קבצי אפליקציה", "יצירת קיצור בשולחן העבודה"]:
             row = tk.Frame(steps_container, bg=BG)
             row.pack(fill="x", pady=1)
             icon = tk.Label(row, text="○", font=("Arial", 11), bg=BG, fg="#aaa", width=2)
@@ -260,10 +260,30 @@ class SetupApp:
                 "@echo off\nchcp 65001 > nul\npython \"%~dp0transcribe.py\"\n",
                 encoding="utf-8"
             )
-            self.progress_done(100); self.update_step(4, "done")
+            self.progress_done(90); self.update_step(4, "done")
         except Exception as e:
             self.progress_done(80); self.update_step(4, "error")
             self.update_status(f"שגיאה: {str(e)[:60]}"); return
+
+        # Step 6 — Desktop shortcut
+        self.update_step(5, "active")
+        self.update_status("יוצר קיצור דרך...")
+        self.progress_start()
+        try:
+            bat_path = str(here / "תמלל.bat").replace("/", "\\")
+            desktop = Path.home() / "Desktop"
+            shortcut_path = str(desktop / "תמלול.lnk").replace("/", "\\")
+            ps_cmd = (
+                f'$s=(New-Object -COM WScript.Shell).CreateShortcut("{shortcut_path}");'
+                f'$s.TargetPath="{bat_path}";'
+                f'$s.WorkingDirectory="{str(here).replace("/", chr(92))}";'
+                f'$s.Description="מערכת תמלול";'
+                f'$s.Save()'
+            )
+            subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True)
+            self.progress_done(100); self.update_step(5, "done")
+        except Exception:
+            self.progress_done(90); self.update_step(5, "warning")
 
         self.update_status("")
         self.root.after(0, self.show_done)
@@ -276,7 +296,7 @@ class SetupApp:
 
     def show_done(self):
         self.btn.config(text="✓ ההתקנה הושלמה!", bg=GREEN)
-        messagebox.showinfo("הושלם!", "ההתקנה הושלמה.\n\nפתח את תמלל.bat כדי להתחיל.")
+        messagebox.showinfo("הושלם!", "ההתקנה הושלמה.\n\nיש קיצור דרך בשולחן העבודה — לחצי עליו כדי להתחיל.")
         self.root.destroy()
 
 
