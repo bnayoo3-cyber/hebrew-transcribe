@@ -402,12 +402,13 @@ class TranscribeApp:
                 raise RuntimeError(f"RunPod שגיאה {resp.status_code}: {resp.text[:200]}")
             job_id = resp.json()["id"]
 
-            # Poll until done
+            # Poll until done (max 5 min per chunk)
             elapsed = 0
-            while True:
-                self._update_status(f"מתמלל חלק {i+1}/{len(chunks)}... ({elapsed}ש')")
+            MAX_WAIT = 300
+            while elapsed < MAX_WAIT:
                 time.sleep(5)
                 elapsed += 5
+                self._update_status(f"מתמלל חלק {i+1}/{len(chunks)}... ({elapsed}ש')")
                 status_resp = requests.get(
                     f"https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}",
                     headers=headers, timeout=30
@@ -419,11 +420,15 @@ class TranscribeApp:
                     break
                 if status in ("FAILED", "CANCELLED"):
                     raise RuntimeError(f"השרת נכשל: {data.get('error', status)}")
+            else:
+                raise RuntimeError(f"timeout — השרת לא הגיב תוך {MAX_WAIT} שניות")
 
-            output = data.get("output", {})
-            result_items = output.get("result", [])
+            # output is a list of {type, data} items
+            result_items = data.get("output") or []
+            if isinstance(result_items, dict):
+                result_items = result_items.get("result", [])
             for item in result_items:
-                if item.get("type") == "segments":
+                if isinstance(item, dict) and item.get("type") == "segments":
                     for seg in item.get("data", []):
                         t = seg.get("text", "").strip()
                         if t:
