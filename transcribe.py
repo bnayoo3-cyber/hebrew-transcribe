@@ -348,74 +348,97 @@ class TranscribeApp:
     # ------------------------------------------------------------------ #
     #  RunPod / ivrit.ai
     # ------------------------------------------------------------------ #
+    RUNPOD_CHUNK_MB = 3.5  # max blob size per request
+
     def _transcribe_runpod(self, audio_path):
         import requests
 
         key = load_key("runpod")
         endpoint_id = load_secret("runpod_endpoint")
-        audio_path = self._to_mp3(audio_path)
 
-        self._update_status("מעלה קובץ לשרת ivrit.ai...")
-        with open(audio_path, "rb") as f:
-            audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+        # Convert to low-bitrate mp3 (64kbps is enough for speech, keeps files small)
+        audio_path = Path(audio_path)
+        self._update_status("ממיר לאודיו...")
+        mp3_path = audio_path.with_suffix(".mp3")
+        subprocess.run(
+            [get_ffmpeg(), "-y", "-i", str(audio_path), "-b:a", "64k", "-map", "a", str(mp3_path)],
+            capture_output=True
+        )
+        audio_path = mp3_path
+
+        size_mb = audio_path.stat().st_size / (1024 * 1024)
+        if size_mb > self.RUNPOD_CHUNK_MB:
+            chunks = self._split_audio(str(audio_path), chunk_minutes=4)
+        else:
+            chunks = [audio_path]
 
         headers = {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json"
         }
-        payload = {
-            "input": {
-                "streaming": False,
-                "transcribe_args": {
-                    "blob": audio_b64,
-                    "language": "he"
+
+        all_texts = []
+        for i, chunk in enumerate(chunks):
+            self._update_status(f"שולח חלק {i+1}/{len(chunks)} לשרת ivrit.ai...")
+            with open(chunk, "rb") as f:
+                audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+            payload = {
+                "input": {
+                    "streaming": False,
+                    "transcribe_args": {
+                        "blob": audio_b64,
+                        "language": "he"
+                    }
                 }
             }
-        }
 
-        # Submit job (async)
-        resp = requests.post(
-            f"https://api.runpod.ai/v2/{endpoint_id}/run",
-            headers=headers, json=payload, timeout=60
-        )
-        resp.raise_for_status()
-        job_id = resp.json()["id"]
-
-        # Poll until done
-        elapsed = 0
-        while True:
-            self._update_status(f"מתמלל... ({elapsed}ש')")
-            time.sleep(5)
-            elapsed += 5
-            status_resp = requests.get(
-                f"https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}",
-                headers=headers, timeout=30
+            resp = requests.post(
+                f"https://api.runpod.ai/v2/{endpoint_id}/run",
+                headers=headers, json=payload, timeout=60
             )
-            status_resp.raise_for_status()
-            data = status_resp.json()
-            status = data.get("status", "")
+            if not resp.ok:
+                raise RuntimeError(f"RunPod שגיאה {resp.status_code}: {resp.text[:200]}")
+            job_id = resp.json()["id"]
 
-            if status == "COMPLETED":
-                break
-            if status in ("FAILED", "CANCELLED"):
-                raise RuntimeError(f"השרת נכשל: {data.get('error', status)}")
+            # Poll until done
+            elapsed = 0
+            while True:
+                self._update_status(f"מתמלל חלק {i+1}/{len(chunks)}... ({elapsed}ש')")
+                time.sleep(5)
+                elapsed += 5
+                status_resp = requests.get(
+                    f"https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}",
+                    headers=headers, timeout=30
+                )
+                status_resp.raise_for_status()
+                data = status_resp.json()
+                status = data.get("status", "")
+                if status == "COMPLETED":
+                    break
+                if status in ("FAILED", "CANCELLED"):
+                    raise RuntimeError(f"השרת נכשל: {data.get('error', status)}")
 
-        # Parse segments
-        output = data.get("output", {})
-        result_items = output.get("result", [])
-        texts = []
-        for item in result_items:
-            if item.get("type") == "segments":
-                for seg in item.get("data", []):
-                    t = seg.get("text", "").strip()
-                    if t:
-                        texts.append(t)
+            output = data.get("output", {})
+            result_items = output.get("result", [])
+            for item in result_items:
+                if item.get("type") == "segments":
+                    for seg in item.get("data", []):
+                        t = seg.get("text", "").strip()
+                        if t:
+                            all_texts.append(t)
 
-        return " ".join(texts)
+        # Cleanup chunks
+        if len(chunks) > 1:
+            for c in chunks:
+                try: c.unlink()
+                except: pass
+            try: chunks[0].parent.rmdir()
+            except: pass
 
-    # ------------------------------------------------------------------ #
-    #  Thread
-    # ------------------------------------------------------------------ #
+        return " ".join(all_texts)
+
+
     def _transcribe_thread(self):
         try:
             output_dir = Path.home() / "Desktop" / "תמלולים"
