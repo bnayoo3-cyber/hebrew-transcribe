@@ -385,6 +385,7 @@ class TranscribeApp:
 
             payload = {
                 "input": {
+                    "model": "ivrit-ai/whisper-large-v3-turbo-ct2",
                     "streaming": False,
                     "transcribe_args": {
                         "blob": audio_b64,
