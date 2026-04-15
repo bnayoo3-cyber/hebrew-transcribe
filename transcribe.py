@@ -427,14 +427,33 @@ class TranscribeApp:
             else:
                 raise RuntimeError(f"timeout — השרת לא הגיב תוך {MAX_WAIT} שניות")
 
-            # output is a list of {type, data} items
-            result_items = data.get("output") or []
-            if isinstance(result_items, dict):
-                result_items = result_items.get("result", [])
+            # Debug: save raw output to desktop
+            import json as _json
+            _dbg = os.path.join(os.path.expanduser("~"), "Desktop", "runpod_debug.json")
+            with open(_dbg, "w", encoding="utf-8") as _f:
+                _json.dump(data, _f, ensure_ascii=False, indent=2)
+
+            output = data.get("output")
+            # Handle all known output shapes
+            if isinstance(output, list):
+                result_items = output
+            elif isinstance(output, dict):
+                result_items = output.get("result", [])
+            else:
+                result_items = []
+
             for item in result_items:
-                if isinstance(item, dict) and item.get("type") == "segments":
-                    for seg in item.get("data", []):
-                        t = seg.get("text", "").strip()
+                if isinstance(item, str):
+                    if item.strip():
+                        all_texts.append(item.strip())
+                elif isinstance(item, dict):
+                    if item.get("type") == "segments":
+                        for seg in item.get("data", []):
+                            t = seg.get("text", "").strip()
+                            if t:
+                                all_texts.append(t)
+                    elif "text" in item:
+                        t = item["text"].strip()
                         if t:
                             all_texts.append(t)
 
