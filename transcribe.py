@@ -408,7 +408,11 @@ class TranscribeApp:
             while elapsed < MAX_WAIT:
                 time.sleep(5)
                 elapsed += 5
-                self._update_status(f"מתמלל חלק {i+1}/{len(chunks)}... ({elapsed}ש')")
+                if elapsed <= 90:
+                    note = " (השרת מתאתחל — עד 3 דקות בפעם הראשונה)"
+                else:
+                    note = ""
+                self._update_status(f"מתמלל חלק {i+1}/{len(chunks)}... ({elapsed}ש'){note}")
                 status_resp = requests.get(
                     f"https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}",
                     headers=headers, timeout=30
