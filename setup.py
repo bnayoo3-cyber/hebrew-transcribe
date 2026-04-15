@@ -50,7 +50,7 @@ class SetupApp:
     def __init__(self, root):
         self.root = root
         self.root.title("התקנת מערכת תמלול")
-        self.root.geometry("500x500")
+        self.root.geometry("500x570")
         self.root.resizable(False, False)
         self.root.configure(bg=BG)
         self.mode = tk.StringVar(value="groq")
