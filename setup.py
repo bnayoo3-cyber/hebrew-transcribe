@@ -150,7 +150,10 @@ class SetupApp:
         row.pack(fill="x", pady=2)
         tk.Label(row, text=label, font=("Arial", 9), bg=BG, width=16, anchor="w").pack(side="left")
         tk.Entry(row, textvariable=var, font=("Arial", 9),
-                 width=28, relief="solid", bd=1).pack(side="left", ipady=3)
+                 width=24, relief="solid", bd=1).pack(side="left", padx=(0,4), ipady=3)
+        tk.Button(row, text="הדבק", font=("Arial", 8), relief="flat", bg="#ddd",
+                  cursor="hand2", command=lambda: var.set(self.root.clipboard_get())
+                  ).pack(side="left")
 
     def _on_mode_change(self):
         self._build_creds()
