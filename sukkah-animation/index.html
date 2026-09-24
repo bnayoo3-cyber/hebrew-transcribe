@@ -499,6 +499,7 @@ const grain = (() => {
   }
   return ctx.createPattern(g, 'repeat');
 })();
+const STILL_GRAIN = new URLSearchParams(location.search).has('gif');
 const vignette = (() => {
   const g = ctx.createRadialGradient(640, 360, 260, 640, 360, 780);
   g.addColorStop(0, 'rgba(60,30,0,0)'); g.addColorStop(1, 'rgba(60,30,0,0.38)');
@@ -507,11 +508,12 @@ const vignette = (() => {
 function post_(clock) {
   ctx.save();
   ctx.globalCompositeOperation = 'multiply';
-  const jr = mulberry32(clock * 31 + 7);
+  const jr = mulberry32(STILL_GRAIN ? 7 : clock * 31 + 7);      // ?gif = מרקם קבוע, לקובץ GIF קטן יותר
   ctx.translate(Math.floor(jr() * 40), Math.floor(jr() * 40));   // המרקם "זז" כמו גרעין של מצלמה
   ctx.fillStyle = grain; ctx.fillRect(-40, -40, W + 80, H + 80);
   ctx.restore();
   ctx.fillStyle = vignette; ctx.fillRect(0, 0, W, H);
+  if (STILL_GRAIN) return;
   ctx.fillStyle = `rgba(30,15,0,${(jr() * 0.045).toFixed(3)})`;   // הבהוב אור קטן
   ctx.fillRect(0, 0, W, H);
 }
