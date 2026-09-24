@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>סוכה נבנית</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Secular+One&family=Rubik:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #2a1f16; --fg: #f6ecd4; --btn: #f6ecd4; --btn-fg: #2a1f16; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; padding: 16px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    background: radial-gradient(ellipse at center, #3b2c1f 0%, var(--bg) 70%);
+    color: var(--fg); font-family: Rubik, "Arial Hebrew", sans-serif;
+  }
+  .stage {
+    width: min(100%, calc((100vh - 110px) * 16 / 9));
+    aspect-ratio: 16 / 9; border-radius: 6px; overflow: hidden;
+    box-shadow: 0 18px 40px rgba(0,0,0,.55), 0 0 0 8px #4a3726, 0 0 0 10px #1c140d;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  button {
+    font: 700 16px Rubik, sans-serif; padding: 10px 18px; border: none; border-radius: 999px;
+    background: var(--btn); color: var(--btn-fg); cursor: pointer;
+    box-shadow: 2px 3px 0 rgba(0,0,0,.4); transform: rotate(-1deg);
+  }
+  button:nth-child(2) { transform: rotate(1.2deg); }
+  button:active { transform: translate(1px, 2px); box-shadow: 1px 1px 0 rgba(0,0,0,.4); }
+  button:disabled { opacity: .6; cursor: default; }
+</style>
+</head>
+<body>
+<div class="stage"><canvas id="c" aria-label="אנימציית סטופ-מושן של סוכה מגזרי נייר שנבנית מעצמה"></canvas></div>
+<div class="controls">
+  <button id="replay">↺ מההתחלה</button>
+  <button id="pause">⏸ השהה</button>
+  <button id="rec">⬇ הורדה כווידאו</button>
+</div>
+
+<script>
+// ============================================================
+//  סוכה נבנית מעצמה — סטופ-מושן בסגנון גזרי נייר
+//  הכל מצויר ב-Canvas: כל "גזיר" הוא מצולע עם שוליים גזורים,
+//  צל של נייר מודבק, ותזוזה קטנה בכל פריים (כמו צילום פריים-פריים).
+// ============================================================
+const W = 1280, H = 720, FPS = 12;           // 12 פריימים לשנייה = תחושת סטופ-מושן
+const END = 100;                              // פריים שבו הבנייה מסתיימת
+const HOLD = 140;                             // מחזיקים את התמונה הגמורה
+const REWIND = 3;                             // פירוק לאחור פי 3 מהר
+const REW_END = HOLD + Math.ceil(END / REWIND);
+const LOOP = REW_END + 6;
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+cv.width = W * DPR; cv.height = H * DPR;
+
+// ---------- כלים ----------
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const R = mulberry32(5786);                   // אקראיות קבועה לצורות (אותה גזירה בכל ריצה)
+const rnd = (a, b) => a + R() * (b - a);
+const pick = arr => arr[Math.floor(R() * arr.length)];
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const easeOut = x => 1 - Math.pow(1 - x, 3);
+const easeOutBack = (x, s = 1.7) => 1 + (s + 1) * Math.pow(x - 1, 3) + s * Math.pow(x - 1, 2);
+
+// שוליים של גזירה במספריים: מחלקים כל צלע ומזיזים קצת את הנקודות
+function rough(pts, amp = 1.3, step = 12) {
+  const out = [];
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+    const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+    const n = Math.max(1, Math.round(len / step)), nx = -dy / len, ny = dx / len;
+    for (let k = 0; k < n; k++) {
+      const f = k / n, o = k === 0 ? rnd(-amp, amp) * 0.5 : rnd(-amp, amp);
+      out.push([x1 + dx * f + nx * o, y1 + dy * f + ny * o]);
+    }
+  }
+  return out;
+}
+const rect = (x, y, w, h) => [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+function ell(cx, cy, rx, ry = rx, rot = 0, n) {
+  n = n || Math.max(12, Math.round((rx + ry) * 0.55));
+  const c = Math.cos(rot), s = Math.sin(rot), pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = i / n * Math.PI * 2, x = Math.cos(a) * rx, y = Math.sin(a) * ry;
+    pts.push([cx + x * c - y * s, cy + x * s + y * c]);
+  }
+  return pts;
+}
+function bboxOf(polys) {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const p of polys) for (const [x, y] of p) {
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+  }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+// "נתיב" = פיסת נייר בצבע אחד (יכולה להיות מכמה מצולעים)
+function P(polys, color, o = {}) {
+  if (typeof polys[0][0] === 'number') polys = [polys];
+  return {
+    polys: polys.map(p => o.raw ? p : rough(p, o.amp ?? 1.3, o.step ?? 12)),
+    color, detail: !!o.detail, rule: o.rule || 'nonzero', bbox: bboxOf(polys),
+  };
+}
+
+// ---------- ציור ----------
+function SH(b, x, y, c) {
+  ctx.shadowBlur = b * DPR; ctx.shadowOffsetX = x * DPR; ctx.shadowOffsetY = y * DPR;
+  ctx.shadowColor = c;
+}
+const NOSH = () => SH(0, 0, 0, 'rgba(0,0,0,0)');
+function trace(path) {
+  ctx.beginPath();
+  for (const poly of path.polys) {
+    ctx.moveTo(poly[0][0], poly[0][1]);
+    for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
+    ctx.closePath();
+  }
+}
+function drawPaths(paths, depth = 1) {
+  const bases = paths.filter(p => !p.detail), details = paths.filter(p => p.detail);
+  // מעבר 1: נייר + צל (הצל של כל השכבה ביחד)
+  if (depth > 0) {
+    SH(7 * depth, 3 * depth, 4 * depth, 'rgba(45,28,12,0.38)');
+    for (const b of bases) { trace(b); ctx.fillStyle = b.color; ctx.fill(b.rule); }
+  }
+  // מעבר 2: מילוי נקי + קו חיתוך בהיר (הליבה הלבנה של הנייר)
+  NOSH();
+  ctx.lineWidth = 1.1; ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  for (const b of bases) { trace(b); ctx.fillStyle = b.color; ctx.fill(b.rule); if (depth > 0) ctx.stroke(); }
+  // פרטים מודבקים מעל עם צל קטן
+  if (details.length) {
+    SH(2.5, 1, 1.5, 'rgba(45,28,12,0.35)');
+    for (const d of details) { trace(d); ctx.fillStyle = d.color; ctx.fill(d.rule); }
+    NOSH();
+  }
+}
+
+// ---------- רשימת הגזירים (לפי סדר שכבות) ----------
+const S = [];
+function add(o) {
+  o.id = S.length;
+  if (o.jitter === undefined) o.jitter = 1;
+  if (!o.bb && Array.isArray(o.paths)) o.bb = o.paths[0].bbox;
+  S.push(o);
+  return o;
+}
+
+const C = {
+  sky: '#8fd0e3', sky2: '#b3e2ea', sun: '#ffd23f', sunIn: '#ffe486', ray: '#ffae2b', cloud: '#fffaf0',
+  hill1: '#a9d18e', hill2: '#86bd6f', ground: '#62a34b', tuft: '#4c8c3c', leaf: '#5e9e45',
+  wood: '#a86b3c', woodL: '#c98a52', woodD: '#7a4826',
+  wall: '#f6ecd4', wallS: '#e4d2ab', blue: '#2f6db5', red: '#d9483b', gold: '#f5b700',
+  floor: '#d9a766', floorL: '#b9864c',
+};
+const PAPER = ['#e84a5f', '#ffcc33', '#2a9df4', '#4caf50', '#ff8c42', '#9b59b6'];
+
+// --- שמיים ---
+add({ start: 0, dur: 1, anim: 'static', jitter: 0, depth: 0, paths: [P(rect(0, 0, W, H), C.sky, { raw: true })] });
+{
+  const pts = [];
+  for (let x = -20; x <= 1300; x += 60) pts.push([x, 330 + 14 * Math.sin(x / 150)]);
+  pts.push([1300, 720], [-20, 720]);
+  add({ start: 0, dur: 1, anim: 'static', jitter: 0.3, depth: 0.4, paths: [P(pts, C.sky2)] });
+}
+
+// --- שמש מסתובבת בקפיצות ---
+{
+  const SX = 1130, SY = 118, rays = [];
+  for (let i = 0; i < 14; i++) {
+    const a = i / 14 * Math.PI * 2;
+    rays.push([[Math.cos(a - .13) * 58, Math.sin(a - .13) * 58], [Math.cos(a) * 98, Math.sin(a) * 98],
+               [Math.cos(a + .13) * 58, Math.sin(a + .13) * 58]].map(([x, y]) => [x + SX, y + SY]));
+  }
+  add({ start: 0, dur: 5, anim: 'pop', ox: SX, oy: SY, depth: 0.8,
+        spinFn: (t, clock) => Math.floor(clock / 3) * 0.06,
+        paths: [P(rays, C.ray, { amp: 1 }), P(ell(SX, SY, 60), C.sun, { amp: .8 }), P(ell(SX, SY, 42), C.sunIn, { detail: true, amp: .8 })] });
+}
+
+// --- עננים ---
+function cloud(cx, cy, k, start, from) {
+  const bits = [[-60, 10, 32], [-22, -10, 42], [26, -4, 36], [62, 12, 26]].map(([x, y, r]) => ell(cx + x * k, cy + y * k, r * k));
+  bits.push(ell(cx, cy + 20 * k, 80 * k, 18 * k));
+  add({ start, dur: 6, anim: 'slideX', dist: from, ox: cx, oy: cy, depth: 0.7, paths: [P(bits, C.cloud, { amp: 1 })] });
+}
+cloud(190, 175, 1, 1, -420);
+cloud(1030, 285, 0.8, 2, 420);
+
+// --- גבעות, עצים, אדמה ---
+{
+  const pts = [];
+  for (let x = -20; x <= 1300; x += 40) pts.push([x, 478 + 26 * Math.sin(x / 190 + 0.4) + 10 * Math.sin(x / 60)]);
+  pts.push([1300, 720], [-20, 720]);
+  add({ start: 2, dur: 6, anim: 'slideUp', dist: 260, ox: 640, oy: 600, depth: 0.6, paths: [P(pts, C.hill1)] });
+}
+function tree(x, y, r, start) {
+  add({ start, dur: 5, anim: 'pop', ox: x, oy: y, depth: 0.7,
+        paths: [P(rect(x - 5, y - r - 10, 10, r + 12), C.woodD), P(ell(x, y - r - 16, r, r * 1.1), C.leaf),
+                P(ell(x - r * .3, y - r - 24, r * .45), '#79b85c', { detail: true })] });
+}
+tree(120, 470, 34, 5); tree(1160, 468, 30, 6); tree(1060, 490, 22, 7);
+{
+  const pts = [];
+  for (let x = -20; x <= 1300; x += 40) pts.push([x, 548 + 22 * Math.sin(x / 130 + 1.3)]);
+  pts.push([1300, 720], [-20, 720]);
+  add({ start: 3, dur: 6, anim: 'slideUp', dist: 220, ox: 640, oy: 640, depth: 0.7, paths: [P(pts, C.hill2)] });
+}
+const groundY = x => 606 + 6 * Math.sin(x / 70);
+{
+  const pts = [];
+  for (let x = -20; x <= 1300; x += 40) pts.push([x, groundY(x)]);
+  pts.push([1300, 720], [-20, 720]);
+  add({ start: 4, dur: 5, anim: 'slideUp', dist: 160, ox: 640, oy: 660, paths: [P(pts, C.ground)] });
+  const tufts = [];
+  for (let x = -10; x < 1290; x += rnd(18, 30)) {
+    const g = groundY(x + 6);
+    tufts.push([[x, g + 5], [x + 4, g - rnd(8, 16)], [x + 7, g + 1], [x + 10, g - rnd(8, 14)], [x + 14, g + 5]]);
+  }
+  add({ start: 6, dur: 4, anim: 'slideUp', dist: 24, ox: 640, oy: 606, jitter: 0.6, paths: [P(tufts, C.tuft, { amp: .6, step: 8 })] });
+}
+function flower(x, y, col, start) {
+  const petals = [];
+  for (let i = 0; i < 5; i++) { const a = i / 5 * Math.PI * 2; petals.push(ell(x + Math.cos(a) * 9, y + Math.sin(a) * 9, 7)); }
+  add({ start, dur: 4, anim: 'pop', ox: x, oy: y + 30,
+        paths: [P(rect(x - 2, y, 4, 34), C.tuft, { amp: .5 }), P(petals, col, { amp: .7 }), P(ell(x, y, 6), '#ffcc33', { detail: true, amp: .5 })] });
+}
+flower(90, 668, '#e84a5f', 7); flower(170, 690, '#ffffff', 8); flower(250, 662, '#9b59b6', 9);
+flower(1030, 664, '#ff8c42', 8); flower(1110, 692, '#e84a5f', 9); flower(1195, 666, '#ffffff', 7);
+
+// --- רצפת הסוכה ---
+{
+  const planks = [];
+  for (let i = 1; i < 6; i++) {
+    const xf = 404 + i * 472 / 6, xb = 470 + i * 340 / 6;
+    planks.push([[xb - 1, 581], [xb + 1, 581], [xf + 1.5, 639], [xf - 1.5, 639]]);
+  }
+  add({ start: 7, dur: 5, anim: 'pop', ox: 640, oy: 620,
+        paths: [P([[404, 640], [470, 580], [810, 580], [876, 640]], C.floor),
+                P(rect(394, 638, 492, 14), C.floorL),
+                P(planks, C.floorL, { detail: true, amp: .4 })] });
+}
+
+// --- קיר אחורי (נפרש מלמעלה) ---
+add({ start: 26, dur: 6, anim: 'unroll', ox: 640, oy: 430, rollColor: '#eadcbc',
+      paths: [P(rect(488, 274, 304, 306), C.wall),
+              P(rect(500, 274, 9, 306), C.blue, { detail: true, amp: .7 }),
+              P(rect(771, 274, 9, 306), C.blue, { detail: true, amp: .7 }),
+              P(rect(488, 540, 304, 11), C.red, { detail: true, amp: .8 }),
+              P(rect(488, 284, 304, 7), C.blue, { detail: true, amp: .7 })] });
+
+// --- עמודים אחוריים וקורה ---
+function post(x, y, w, h, start) {
+  add({ start, dur: 5, anim: 'rise', dist: h, base: y + h, ox: x + w / 2, oy: y + h,
+        paths: [P(rect(x, y, w, h), C.wood), P(rect(x + w * .25, y + 8, w * .18, h - 16), C.woodL, { detail: true, amp: .6 })] });
+}
+post(470, 268, 18, 312, 9);
+post(792, 268, 18, 312, 11);
+add({ start: 14, dur: 5, anim: 'drop', dist: 420, spin: 0.35, ox: 640, oy: 266,
+      paths: [P(rect(460, 258, 360, 16), C.wood), P(rect(470, 262, 340, 3), C.woodL, { detail: true, amp: .5 })] });
+
+// --- קירות צד ---
+function sideWall(xf, xb, start) {
+  const ty = x => 308 + (x - xf) / (xb - xf) * (274 - 308);
+  const by = x => 640 + (x - xf) / (xb - xf) * (580 - 640);
+  const s1 = xf + (xb - xf) * 0.15, s2 = xf + (xb - xf) * 0.27;
+  add({ start, dur: 6, anim: 'unroll', ox: (xf + xb) / 2, oy: 450, rollColor: '#d8c49a',
+        paths: [P([[xf, ty(xf)], [xb, ty(xb)], [xb, by(xb)], [xf, by(xf)]], C.wallS),
+                P([[s1, ty(s1)], [s2, ty(s2)], [s2, by(s2)], [s1, by(s1)]], C.blue, { detail: true, amp: .6 })] });
+}
+sideWall(404, 470, 29);
+sideWall(876, 810, 32);
+
+// --- כיסאות ושולחן ---
+function chair(mirror, start) {
+  const m = x => mirror ? 1280 - x : x, r = (x, y, w, h) => rect(mirror ? 1280 - x - w : x, y, w, h);
+  add({ start, dur: 4, anim: 'pop', ox: m(518), oy: 600,
+        paths: [P([r(492, 458, 9, 150), r(492, 528, 54, 10), r(536, 538, 8, 70)], C.blue, { amp: .8 }),
+                P(r(494, 466, 5, 56), '#5b92d6', { detail: true, amp: .4 })] });
+}
+chair(false, 36); chair(true, 37);
+add({ start: 38, dur: 5, anim: 'drop', dist: 380, spin: -0.2, ox: 640, oy: 505,
+      paths: [P([rect(518, 500, 244, 12), rect(534, 512, 10, 98), rect(736, 512, 10, 98)], C.woodD)] });
+{
+  const pts = [[514, 494], [766, 494], [782, 534]];
+  for (let cx = 782 - 14; cx > 500; cx -= 28)
+    for (let a = 0; a <= Math.PI; a += Math.PI / 5) pts.push([cx + 14 * Math.cos(a), 534 + 9 * Math.sin(a)]);
+  pts.push([498, 534]);
+  add({ start: 41, dur: 5, anim: 'drop', dist: 420, spin: 0.25, ox: 640, oy: 510,
+        paths: [P(pts, '#ffffff', { amp: .7, step: 14 }), P([[504, 522], [776, 522], [778, 528], [502, 528]], '#7cc4fa', { detail: true, amp: .5 })] });
+}
+// פירות (מאחורי הקערה)
+[[622, 468, 13, '#ff8c42', 45], [652, 463, 14, '#d9303e', 46], [669, 472, 11, '#8cc43f', 46], [636, 457, 10, '#7b3f9e', 47]]
+  .forEach(([x, y, r, c, s]) => add({ start: s, dur: 4, anim: 'pop', ox: x, oy: y,
+    paths: [P(ell(x, y, r), c, { amp: .6 }), P(ell(x - r * .35, y - r * .35, r * .3), 'rgba(255,255,255,.55)', { detail: true, amp: .3 })] }));
+{
+  const bowl = [];
+  for (let i = 0; i <= 12; i++) { const a = i / 12 * Math.PI; bowl.push([640 + 38 * Math.cos(a), 476 + 20 * Math.sin(a)]); }
+  add({ start: 44, dur: 4, anim: 'pop', ox: 640, oy: 494,
+        paths: [P([bowl, rect(626, 492, 28, 6)], C.blue, { amp: .7 }), P(rect(606, 482, 68, 4), '#ffcc33', { detail: true, amp: .4 })] });
+}
+// נרות עם להבה מרצדת
+function candle(x, start) {
+  const flames = [0, 1, 2].map(() => {
+    const tip = rnd(-3, 3), h = rnd(18, 23);
+    return [P([[x + tip, 444 - h], [x + 5.5, 438], [x + 3, 444], [x - 3, 444], [x - 5.5, 438]], C.ray, { amp: .5, step: 6 }),
+            P([[x + tip * .6, 444 - h * .55], [x + 2.5, 440], [x, 443], [x - 2.5, 440]], '#fff1a6', { detail: true, amp: .3, step: 6 })];
+  });
+  const body = [P([rect(x - 12, 492, 24, 6), rect(x - 3, 470, 6, 24)], C.gold, { amp: .6 }),
+                P(rect(x - 6, 444, 12, 28), '#fffdf5', { amp: .6 }),
+                P(rect(x - 6, 446, 4, 9), '#efe6cf', { detail: true, amp: .3 })];
+  add({ start, dur: 4, anim: 'pop', ox: x, oy: 496, paths: (t, clock) => body.concat(flames[clock % 3]), bb: body[0].bbox });
+}
+candle(572, 46); candle(708, 47);
+
+// --- קישוטים תלויים (יורדים מהסכך ומתנדנדים) ---
+function hanging(hx, len, start, paths) {
+  add({ start, dur: 6, anim: 'swing', string: true, len, ox: hx, oy: 312, amp: 0.22, paths });
+}
+{ // רימון
+  const x = 528, top = 312 + 70;
+  hanging(x, 70, 68, [P(ell(x, top + 17, 17), '#c62839', { amp: 1 }),
+    P([[x - 7, top + 2], [x - 4, top - 5], [x - 1, top + 1], [x + 2, top - 6], [x + 4, top + 1], [x + 7, top - 4], [x + 7, top + 4], [x - 7, top + 4]], '#9e1b2b', { detail: true, amp: .4, step: 6 }),
+    P(ell(x - 6, top + 11, 4, 6, .5), '#ef6a78', { detail: true, amp: .3 })]);
+}
+{ // מגן דוד
+  const x = 596, cy = 312 + 88 + 18, tri = off => [0, 1, 2].map(i => { const a = off + i / 3 * Math.PI * 2; return [x + Math.cos(a) * 20, cy + Math.sin(a) * 20]; });
+  hanging(x, 88, 70, [P([tri(-Math.PI / 2), tri(Math.PI / 2)], C.gold, { amp: .7, step: 8 }), P(ell(x, cy, 7, 7, 0, 6), '#ffe486', { detail: true, amp: .3 })]);
+}
+{ // אתרוג
+  const x = 684, top = 312 + 74;
+  hanging(x, 74, 72, [P(ell(x, top + 17, 12, 17, .15), '#f2d024', { amp: 1.4, step: 7 }),
+    P(rect(x - 2, top - 3, 4, 7), '#5a8f2e', { detail: true, amp: .3 }),
+    P(ell(x - 4, top + 11, 3, 6, .3), '#fbe57a', { detail: true, amp: .3 })]);
+}
+{ // ענבים
+  const x = 752, top = 312 + 62, grapes = [];
+  [[-9, 8], [0, 8], [9, 8], [-4.5, 17], [4.5, 17], [-9, 26], [0, 26], [9, 26], [-4.5, 35], [4.5, 35], [0, 43]]
+    .forEach(([gx, gy]) => grapes.push(ell(x + gx, top + gy, 6)));
+  hanging(x, 62, 74, [P(grapes, '#7b3f9e', { amp: .5 }), P([[x, top], [x + 16, top - 6], [x + 10, top + 6]], '#4caf50', { detail: true, amp: .4, step: 6 })]);
+}
+
+// --- עמודים קדמיים וקורות ---
+post(378, 296, 26, 344, 16);
+post(876, 296, 26, 344, 18);
+add({ start: 21, dur: 4, anim: 'drop', dist: 400, spin: 0.3, ox: 430, oy: 285,
+      paths: [P([[380, 296], [470, 262], [478, 272], [396, 308]], C.wood, { amp: .8 })] });
+add({ start: 22, dur: 4, anim: 'drop', dist: 400, spin: -0.3, ox: 850, oy: 285,
+      paths: [P([[900, 296], [810, 262], [802, 272], [884, 308]], C.wood, { amp: .8 })] });
+add({ start: 23, dur: 5, anim: 'drop', dist: 460, spin: -0.25, ox: 640, oy: 300,
+      paths: [P(rect(366, 288, 548, 24), C.wood), P(rect(378, 294, 524, 4), C.woodL, { detail: true, amp: .6 })] });
+
+// --- שרשרת נייר (טבעת אחרי טבעת) ---
+{
+  const N = 28, x0 = 410, x1 = 870, cy = x => 318 + 50 * (1 - Math.pow((x - 640) / 236, 2));
+  for (let i = 0; i < N; i++) {
+    const x = x0 + i * (x1 - x0) / (N - 1), y = cy(x), ang = Math.atan2(cy(x + 1) - y, 1), col = PAPER[i % PAPER.length];
+    const paths = i % 2 === 0
+      ? [P([ell(x, y, 11, 8, ang, 16), ell(x, y, 6.5, 3.8, ang, 12).reverse()], col, { amp: .4, rule: 'evenodd' })]
+      : [P(ell(x, y, 12, 3, ang, 12), col, { amp: .3 })];
+    add({ start: 62 + Math.floor(i / 3), dur: 2, anim: 'pop', ox: x, oy: y, jitter: 0.5, paths });
+  }
+}
+
+// --- סכך: ענפי דקל נופלים אחד-אחד ---
+function frond(cx, cy, len, ang, col, start, spin) {
+  const leaves = [], spine = [], c = Math.cos(ang), s = Math.sin(ang);
+  const T = ([x, y]) => [cx + x * c - y * s, cy + x * s + y * c];
+  for (let u = -len / 2 + 8; u < len / 2 - 6; u += 10) {
+    const k = Math.sin(Math.PI * (u + len / 2) / len) * 0.6 + 0.4;
+    for (const side of [-1, 1]) {
+      const L = rnd(24, 34) * k, th = rnd(0.75, 1);
+      leaves.push([[u - 3, 0], [u + L * Math.cos(th), side * L * Math.sin(th)], [u + 3, 0]].map(T));
+    }
+  }
+  spine.push(...[[-len / 2, -2], [len / 2, -1], [len / 2, 1], [-len / 2, 2]].map(T));
+  add({ start, dur: 5, anim: 'drop', dist: 520, spin, ox: cx, oy: cy,
+        paths: [P(leaves, col, { amp: .6, step: 10 }), P(spine, '#3d6b2a', { detail: true, amp: .4 })] });
+}
+{
+  const cols = ['#4f9d3a', '#5fb043', '#3f8a34', '#74b94a', '#6aa840', '#9aae45'];
+  const spots = [[430, 282, 260], [820, 280, 270], [560, 268, 300], [700, 272, 290], [470, 262, 240], [790, 258, 250],
+                 [640, 286, 330], [520, 290, 230], [760, 292, 230], [610, 256, 260], [680, 262, 220]];
+  spots.forEach(([x, y, len], i) => frond(x, y, len, rnd(-.14, .14), cols[i % cols.length], 48 + Math.round(i * 1.5), rnd(-.5, .5)));
+}
+
+// --- ציפור שעוברת בזמן הבנייה ---
+add({ start: 18, dur: 1, anim: 'static', jitter: 0.4, bb: { x: 0, y: 0, w: 0, h: 0 }, paths: (t, clock) => {
+  const x = 1360 - (t - 18) * 24, y = 205 + 10 * Math.sin(t * 0.8);
+  if (x < -80 || x > 1400) return [];
+  const up = clock % 2 === 0;
+  return [P(ell(x, y, 18, 9), '#3d3d5c', { amp: .6 }), P(ell(x - 16, y - 5, 7), '#3d3d5c', { amp: .5 }),
+          P([[x - 22, y - 7], [x - 31, y - 4], [x - 22, y - 2]], '#ff8c42', { detail: true, amp: .3 }),
+          P(up ? [[x - 4, y - 2], [x + 12, y - 26], [x + 10, y - 2]] : [[x - 4, y + 1], [x + 14, y + 22], [x + 10, y + 1]], '#5a5a82', { detail: true, amp: .5 })];
+} });
+
+// --- כותרת: אותיות גזורות קופצות אחת-אחת (מימין לשמאל) ---
+function buildTitle() {
+  const text = 'חג סוכות שמח', size = 92, y = 104, gap = 4;
+  const font = `${size}px "Secular One", Rubik, "Arial Hebrew", sans-serif`;
+  ctx.font = font;
+  const chars = [...text], widths = chars.map(ch => ch === ' ' ? 34 : ctx.measureText(ch).width);
+  const total = widths.reduce((a, b) => a + b, 0) + gap * (chars.length - 1);
+  let xr = 640 + total / 2, n = 0;
+  chars.forEach((ch, i) => {
+    const x = xr - widths[i] / 2;
+    xr -= widths[i] + gap;
+    if (ch === ' ') return;
+    const col = PAPER[n % PAPER.length], r0 = rnd(-0.13, 0.13), start = 78 + n * 1.7;
+    n++;
+    add({ start, dur: 4, anim: 'pop', ox: x, oy: y, jitter: 0.8, bb: { x, y, w: 0, h: 0 },
+          spinFn: () => r0,
+          draw: () => {
+            ctx.font = font; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+            SH(8, 3, 5, 'rgba(45,28,12,0.38)');
+            ctx.lineWidth = 16; ctx.strokeStyle = '#fffaf0'; ctx.strokeText(ch, x, y);
+            SH(2, 1, 1.5, 'rgba(45,28,12,0.3)');
+            ctx.fillStyle = col; ctx.fillText(ch, x, y);
+            NOSH();
+          } });
+  });
+}
+
+// ---------- מנוע הסטופ-מושן ----------
+function drawPiece(p, t, clock) {
+  if (t < p.start) return;
+  const l = Math.min(1, (t - p.start) / p.dur);
+  let dx = 0, dy = 0, rot = 0, s = 1, reveal = 1, clipY = null, low = 0;
+  switch (p.anim) {
+    case 'pop':     s = l < 1 ? easeOutBack(l, 2.6) : 1; if (s < 0.03) return; break;
+    case 'drop':  { const e = easeOutBack(l, 1.5); dy = -(1 - e) * p.dist; rot = (1 - e) * (p.spin || 0); break; }
+    case 'slideUp': dy = (1 - easeOutBack(l, 1.3)) * p.dist; break;
+    case 'slideX':  dx = (1 - easeOutBack(l, 1.3)) * p.dist; break;
+    case 'rise':    dy = (1 - easeOutBack(l, 1.3)) * p.dist; clipY = p.base + 2; break;
+    case 'unroll':  reveal = easeOut(l); break;
+    case 'swing': {
+      low = (1 - easeOutBack(l, 2.2)) * p.len;
+      const k = t - p.start - p.dur;
+      rot = (k > 0 ? p.amp * Math.exp(-k / 12) * Math.sin(k * 0.8) : 0) + 0.03 * Math.sin(clock * 0.35 + p.id);
+      break;
+    }
+  }
+  // "רעד" של סטופ-מושן: כל פיסה זזה טיפה בכל שני פריימים
+  const jr = mulberry32((Math.floor(clock / 2) + 1) * 7919 + p.id * 104729);
+  const J = p.jitter * (l < 1 ? 1.8 : 1);
+  dx += (jr() - .5) * 1.6 * J; dy += (jr() - .5) * 1.6 * J; rot += (jr() - .5) * 0.008 * J;
+  if (p.spinFn) rot += p.spinFn(t, clock);
+
+  const bb = p.bb;
+  ctx.save();
+  if (clipY !== null) { ctx.beginPath(); ctx.rect(-100, -1000, W + 200, clipY + 1000); ctx.clip(); }
+  if (p.anim === 'unroll' && reveal < 1) { ctx.beginPath(); ctx.rect(bb.x - 30, bb.y - 30, bb.w + 60, 30 + bb.h * reveal); ctx.clip(); }
+  ctx.translate(p.ox + dx, p.oy + dy); ctx.rotate(rot); ctx.scale(s, s); ctx.translate(-p.ox, -p.oy);
+  if (p.string) {
+    ctx.strokeStyle = '#5a3d22'; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(p.ox, p.oy); ctx.lineTo(p.ox, p.oy + p.len - low + 2); ctx.stroke();
+    ctx.translate(0, -low);
+  }
+  if (p.draw) p.draw(t, clock, l);
+  else drawPaths(typeof p.paths === 'function' ? p.paths(t, clock) : p.paths, p.depth ?? 1);
+  ctx.restore();
+
+  if (p.anim === 'unroll' && reveal < 1) {           // גליל הבד שנפרש
+    const y = bb.y + bb.h * reveal;
+    ctx.save();
+    SH(5, 2, 3, 'rgba(45,28,12,0.4)');
+    ctx.fillStyle = p.rollColor; ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(bb.x - 5 + dx, y - 8 + dy, bb.w + 10, 16, 8); else ctx.rect(bb.x - 5 + dx, y - 8 + dy, bb.w + 10, 16);
+    ctx.fill(); NOSH();
+    ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.fillRect(bb.x + dx, y - 5 + dy, bb.w, 3);
+    ctx.restore();
+  }
+}
+
+// מרקם נייר + וינייטה + הבהוב תאורה
+const grain = (() => {
+  const g = document.createElement('canvas'); g.width = g.height = 256;
+  const gc = g.getContext('2d'), img = gc.createImageData(256, 256), r = mulberry32(99);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = 232 + r() * 23;
+    img.data[i] = v; img.data[i + 1] = v - 2; img.data[i + 2] = v - 7; img.data[i + 3] = 255;
+  }
+  gc.putImageData(img, 0, 0);
+  gc.strokeStyle = 'rgba(255,255,255,.5)'; gc.lineWidth = .6;
+  for (let i = 0; i < 40; i++) {
+    const x = r() * 256, y = r() * 256, a = r() * Math.PI;
+    gc.beginPath(); gc.moveTo(x, y); gc.lineTo(x + Math.cos(a) * 10, y + Math.sin(a) * 10); gc.stroke();
+  }
+  return ctx.createPattern(g, 'repeat');
+})();
+const vignette = (() => {
+  const g = ctx.createRadialGradient(640, 360, 260, 640, 360, 780);
+  g.addColorStop(0, 'rgba(60,30,0,0)'); g.addColorStop(1, 'rgba(60,30,0,0.38)');
+  return g;
+})();
+function post_(clock) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'multiply';
+  const jr = mulberry32(clock * 31 + 7);
+  ctx.translate(Math.floor(jr() * 40), Math.floor(jr() * 40));   // המרקם "זז" כמו גרעין של מצלמה
+  ctx.fillStyle = grain; ctx.fillRect(-40, -40, W + 80, H + 80);
+  ctx.restore();
+  ctx.fillStyle = vignette; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = `rgba(30,15,0,${(jr() * 0.045).toFixed(3)})`;   // הבהוב אור קטן
+  ctx.fillRect(0, 0, W, H);
+}
+
+function render(clock, t) {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  for (const p of S) drawPiece(p, t, clock);
+  post_(clock);
+}
+function mapT(c) {
+  c %= LOOP;
+  if (c <= HOLD) return Math.min(c, END);
+  if (c <= REW_END) return Math.max(0, END - (c - HOLD) * REWIND);
+  return 0;
+}
+
+// ---------- ניגון, השהיה, הקלטה ----------
+let clock0 = performance.now(), paused = false, pauseAt = 0, last = -1, recorder = null;
+const frameNow = () => Math.floor(((paused ? pauseAt : performance.now()) - clock0) / 1000 * FPS);
+function tick() {
+  const f = frameNow();
+  if (f !== last) {
+    last = f; render(f, mapT(f));
+    if (recorder && f >= HOLD) { recorder.stop(); recorder = null; }
+  }
+  requestAnimationFrame(tick);
+}
+const btnPause = document.getElementById('pause'), btnRec = document.getElementById('rec');
+document.getElementById('replay').onclick = () => { clock0 = performance.now(); paused = false; btnPause.textContent = '⏸ השהה'; };
+btnPause.onclick = () => {
+  if (paused) { clock0 += performance.now() - pauseAt; paused = false; btnPause.textContent = '⏸ השהה'; }
+  else { pauseAt = performance.now(); paused = true; btnPause.textContent = '▶ המשך'; }
+};
+btnRec.onclick = () => {
+  const type = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']
+    .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+  if (!type || !cv.captureStream) { alert('הדפדפן הזה לא תומך בהקלטת וידאו'); return; }
+  const chunks = [];
+  recorder = new MediaRecorder(cv.captureStream(30), { mimeType: type, videoBitsPerSecond: 8e6 });
+  recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+  recorder.onstop = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(chunks, { type }));
+    a.download = 'sukkah-stop-motion.' + (type.startsWith('video/mp4') ? 'mp4' : 'webm');
+    a.click();
+    btnRec.disabled = false; btnRec.textContent = '⬇ הורדה כווידאו';
+  };
+  btnRec.disabled = true; btnRec.textContent = '● מקליט…';
+  clock0 = performance.now(); paused = false; last = -1; btnPause.textContent = '⏸ השהה';
+  recorder.start();
+};
+
+// מחכים לגופן ואז מתחילים (?frame=N מקפיא על פריים מסוים)
+const fontsReady = Promise.race([document.fonts.load('92px "Secular One"').catch(() => {}), new Promise(r => setTimeout(r, 1500))]);
+fontsReady.then(() => {
+  buildTitle();
+  const fz = new URLSearchParams(location.search).get('frame');
+  if (fz !== null) { render(+fz, +fz); window.__ready = true; return; }
+  clock0 = performance.now();
+  requestAnimationFrame(tick);
+});
+</script>
+</body>
+</html>
