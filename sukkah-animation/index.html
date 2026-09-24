@@ -47,7 +47,7 @@
 //  הכל מצויר ב-Canvas: כל "גזיר" הוא מצולע עם שוליים גזורים,
 //  צל של נייר מודבק, ותזוזה קטנה בכל פריים (כמו צילום פריים-פריים).
 // ============================================================
-const W = 1280, H = 720, FPS = 12;           // 12 פריימים לשנייה = תחושת סטופ-מושן
+const W = 1280, H = 720, FPS = 18;           // 18 פריימים לשנייה = סטופ-מושן קצבי (פי 1.5 מהגרסה הראשונה)
 const END = 100;                              // פריים שבו הבנייה מסתיימת
 const HOLD = 140;                             // מחזיקים את התמונה הגמורה
 const REWIND = 3;                             // פירוק לאחור פי 3 מהר
@@ -551,13 +551,20 @@ btnRec.onclick = () => {
     .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
   if (!type || !cv.captureStream) { alert('הדפדפן הזה לא תומך בהקלטת וידאו'); return; }
   const chunks = [];
-  recorder = new MediaRecorder(cv.captureStream(30), { mimeType: type, videoBitsPerSecond: 8e6 });
+  try {
+    recorder = new MediaRecorder(cv.captureStream(30), { mimeType: type, videoBitsPerSecond: 8e6 });
+  } catch (e) { alert('לא הצלחתי להתחיל הקלטה בדפדפן הזה: ' + e.message); recorder = null; return; }
   recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
   recorder.onstop = () => {
-    const a = document.createElement('a');
+    // הקישור מתווסף לעמוד: גם אם ההורדה האוטומטית נחסמת, אפשר ללחוץ עליו ידנית
+    const a = document.getElementById('dl') || document.createElement('a');
+    a.id = 'dl'; a.style.color = 'var(--fg)';
+    if (a.href) URL.revokeObjectURL(a.href);
     a.href = URL.createObjectURL(new Blob(chunks, { type }));
     a.download = 'sukkah-stop-motion.' + (type.startsWith('video/mp4') ? 'mp4' : 'webm');
-    a.click();
+    a.textContent = 'הווידאו מוכן, לחצו כאן לשמירה';
+    document.querySelector('.controls').appendChild(a);
+    try { a.click(); } catch (e) {}
     btnRec.disabled = false; btnRec.textContent = '⬇ הורדה כווידאו';
   };
   btnRec.disabled = true; btnRec.textContent = '● מקליט…';
@@ -570,7 +577,7 @@ const fontsReady = Promise.race([document.fonts.load('92px "Secular One"').catch
 fontsReady.then(() => {
   buildTitle();
   const fz = new URLSearchParams(location.search).get('frame');
-  if (fz !== null) { render(+fz, +fz); window.__ready = true; return; }
+  if (fz !== null) { render(+fz, mapT(+fz)); window.__ready = true; return; }
   clock0 = performance.now();
   requestAnimationFrame(tick);
 });
