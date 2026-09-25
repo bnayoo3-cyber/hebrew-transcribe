@@ -49,10 +49,12 @@
 <p id="msg" aria-live="polite">כל השיר (3:18). בחרו את קובץ השיר מהמכשיר כדי שהאנימציה תתנגן איתו בסנכרון, או לחצו "נגן" לצפייה בלי קול.</p>
 </div>
 
+<script src="lyrics.js"></script>
 <script>
 // ============================================================
 //  שלומית בונה סוכה — כל השיר, סטופ-מושן מגזרי נייר
 //  מילים ולחן: נעמי שמר. התזמון נבנה לפי ניתוח של הקלטת השיר.
+//  המילים נטענות מ-lyrics.js (קובץ פרטי שלא עולה למאגר); בלעדיו אין כתוביות.
 // ============================================================
 const W = 1280, H = 720, FPS = 8;
 const cv = document.getElementById('c');
@@ -765,7 +767,6 @@ const tnosh = () => tsh(0, 0, 0, 0);
 function part(img, sx, sy, sw, sh_, dx, dy, dw, dh) { const k = img.width / W; ctx.drawImage(img, sx * k, sy * k, sw * k, sh_ * k, dx, dy, dw, dh); }
 function full(img, bf, seed = 0) { const r = mulberry32(bf * 131 + seed); ctx.save(); ctx.translate(640 + (r() - .5) * 2, 360 + (r() - .5) * 2); ctx.scale(1.006, 1.006); ctx.drawImage(img, -640, -360, W, H); ctx.restore(); }
 const table = () => { ctx.fillStyle = '#3a2a1c'; ctx.fillRect(0, 0, W, H); };
-const pathOf = pts => { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); };
 
 // 1. דף מתהפך כמו בספר
 function pageTurn(A, B, l, bf) {
@@ -841,6 +842,27 @@ function crumple(A, B, l, bf) {
   }
 }
 
+// 3. קריעה: הדף נקרע לשניים והחצאים עפים לצדדים
+const TEAR = (() => { const pts = []; let x = 640; for (let y = -30; y <= 750; y += 16) { x += rnd(-13, 13); x = clamp(x, 590, 690); pts.push([x, y]); } return pts; })();
+function tearHalf(A, left, e, bf) {
+  const poly = left ? [[-40, -40], ...TEAR, [-40, 760]] : [[1320, -40], ...TEAR, [1320, 760]];
+  const dir = left ? -1 : 1, pvx = left ? 0 : W;
+  ctx.save();
+  ctx.translate(pvx, H); ctx.rotate(dir * e * .16); ctx.translate(-pvx, -H);
+  ctx.translate(dir * (e * 860 + 3), e * (left ? 70 : 40));
+  ctx.beginPath(); poly.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath();
+  ctx.save(); tsh(22, dir * 8, 12, .5); ctx.fillStyle = '#fbf5e6'; ctx.fill(); ctx.restore();   // ליבת הנייר הלבנה בקרע
+  ctx.save(); ctx.clip();
+  ctx.beginPath(); TEAR.forEach(([x, y], i) => ctx.lineTo(x - dir * 4, y)); ctx.lineTo(left ? -40 : 1320, 760); ctx.lineTo(left ? -40 : 1320, -40); ctx.closePath(); ctx.clip();
+  full(A, bf, left ? 3 : 4); ctx.restore();
+  ctx.restore();
+}
+function tear(A, B, l, bf) {
+  full(B, bf, 2);
+  const e = l < .3 ? .004 * (l / .3) : easeIn((l - .3) / .7);
+  tearHalf(A, true, e, bf); tearHalf(A, false, e, bf);
+}
+
 // 4. גלילה למעלה כמו מגילה
 function rollUp(A, B, l, bf) {
   full(B, bf, 2);
@@ -852,6 +874,144 @@ function rollUp(A, B, l, bf) {
   ctx.restore();
 }
 
+// 5. רצועות שמתהפכות אחת-אחת (מימין לשמאל)
+function strips(A, B, l, bf) {
+  table();
+  const N = 8, sw = W / N;
+  for (let i = 0; i < N; i++) {
+    const idx = N - 1 - i, f = clamp((l - i * .075) / .45, 0, 1), sx = Math.cos(Math.PI * f), img = f < .5 ? A : B;
+    const w = sw * Math.abs(sx), x = idx * sw + (sw - w) / 2, r = mulberry32(bf * 7 + i);
+    ctx.save(); tsh(12, 4, 6, .45);
+    part(img, idx * sw, 0, sw, H, x + (r() - .5) * 1.5, (r() - .5) * 1.5, w + .5, H); ctx.restore();
+    if (Math.abs(sx) < 1) { ctx.fillStyle = `rgba(20,10,0,${(.55 * (1 - Math.abs(sx))).toFixed(3)})`; ctx.fillRect(x, 0, w, H); }
+  }
+}
+
+// 6. קיפול אקורדיון: הדף מתקפל למניפה ויוצא
+function accordion(A, B, l, bf) {
+  full(B, bf, 2);
+  const e = ease(l / .72), m = clamp((l - .72) / .28, 0, 1), N = 12, TW = W * (1 - e * .9), pw = TW / N, sw = W / N;
+  const x0 = W - TW + m * (TW + 120);                                // מתקפל ימינה ויוצא ימינה
+  for (let i = 0; i < N; i++) {
+    const ph = H * (1 - .05 * e * (i % 2)), py = (H - ph) / 2, x = x0 + i * pw;
+    ctx.save(); if (i === 0) tsh(22, -8, 10, .5);
+    part(A, i * sw, 0, sw, H, x, py, pw + .6, ph); ctx.restore();
+    ctx.fillStyle = i % 2 ? `rgba(20,10,0,${(.42 * e).toFixed(3)})` : `rgba(255,250,235,${(.1 * e).toFixed(3)})`;
+    ctx.fillRect(x, py, pw + .6, ph);
+  }
+}
+
+// 7. דף חדש נוחת מעל הישן
+function newSheet(A, B, l, bf) {
+  full(A, bf, 1);
+  ctx.fillStyle = `rgba(20,10,0,${(.25 * l).toFixed(3)})`; ctx.fillRect(0, 0, W, H);
+  const e = easeOutBack(l, 1.25);
+  ctx.save(); tsh(40, 0, 24, .55 * (1 - l * .6));
+  ctx.translate(640 + (1 - e) * 1150, 360 - (1 - e) * 260); ctx.rotate((1 - e) * .32); ctx.scale(1.006, 1.006);
+  ctx.drawImage(B, -640, -360, W, H); ctx.restore();
+}
+
+
+// ---------- קריעות מרובות: רשת של קווי קריעה משוננים ----------
+function tornGrid(NX, NY, seed, amp = 16) {
+  const r = mulberry32(seed), rn = (a, b) => a + r() * (b - a);
+  const X0 = -30, Y0 = -30, X1 = W + 30, Y1 = H + 30, cw = (X1 - X0) / NX, chh = (Y1 - Y0) / NY;
+  const P = [];
+  for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
+    const inI = i > 0 && i < NX, inJ = j > 0 && j < NY;
+    P.push([X0 + cw * i + (inI ? rn(-.22, .22) * cw : 0), Y0 + chh * j + (inJ ? rn(-.22, .22) * chh : 0)]);
+  }
+  const at = (i, j) => P[j * (NX + 1) + i];
+  const jag = (a, b) => {                                         // קו קריעה משונן בין שתי נקודות
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(2, Math.round(len / 13)), nx = -(b[1] - a[1]) / len, ny = (b[0] - a[0]) / len;
+    const out = []; let o = 0;
+    for (let k = 1; k < n; k++) { o = clamp(o + rn(-8, 8), -amp, amp); const f = k / n, s = Math.sin(Math.PI * f);
+      out.push([a[0] + (b[0] - a[0]) * f + nx * o * s, a[1] + (b[1] - a[1]) * f + ny * o * s]); }
+    return out;
+  };
+  const Hh = {}, Vv = {}, lines = [];
+  for (let j = 0; j <= NY; j++) for (let i = 0; i < NX; i++) {
+    const outer = j === 0 || j === NY; Hh[i + ',' + j] = outer ? [] : jag(at(i, j), at(i + 1, j));
+    if (!outer) lines.push([at(i, j), ...Hh[i + ',' + j], at(i + 1, j)]);
+  }
+  for (let i = 0; i <= NX; i++) for (let j = 0; j < NY; j++) {
+    const outer = i === 0 || i === NX; Vv[i + ',' + j] = outer ? [] : jag(at(i, j), at(i, j + 1));
+    if (!outer) lines.push([at(i, j), ...Vv[i + ',' + j], at(i, j + 1)]);
+  }
+  const pieces = [];
+  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+    const poly = [at(i, j), ...Hh[i + ',' + j], at(i + 1, j), ...Vv[(i + 1) + ',' + j], at(i + 1, j + 1),
+                  ...[...Hh[i + ',' + (j + 1)]].reverse(), at(i, j + 1), ...[...Vv[i + ',' + j]].reverse()];
+    const cx = poly.reduce((s, p) => s + p[0], 0) / poly.length, cy = poly.reduce((s, p) => s + p[1], 0) / poly.length;
+    const inset = poly.map(([x, y]) => { const d = Math.hypot(cx - x, cy - y) || 1; return [x + (cx - x) * 3.5 / d, y + (cy - y) * 3.5 / d]; });
+    pieces.push({ poly, inset, cx, cy, i, j, r1: rn(-1, 1), r2: rn(-1, 1), r3: r() });
+  }
+  return { pieces, lines };
+}
+const pathOf = pts => { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); };
+function tornPiece(A, pc, tx, ty, rot, sc, lift, bf, rim = true) {
+  ctx.save();
+  ctx.translate(pc.cx + tx, pc.cy + ty); ctx.rotate(rot); ctx.scale(sc, sc); ctx.translate(-pc.cx, -pc.cy);
+  if (rim) { pathOf(pc.poly); tsh(10 + 20 * lift, 4 + 8 * lift, 6 + 12 * lift, .5); ctx.fillStyle = '#fbf5e6'; ctx.fill(); tnosh(); }
+  pathOf(rim ? pc.inset : pc.poly); ctx.clip();
+  full(A, bf, 1);
+  ctx.restore();
+}
+function ripLines(A, g, t, bf) {                                    // הקריעה מתפשטת לאורך הקווים
+  full(A, bf, 1);
+  ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const ln of g.lines) {
+    const n = Math.max(2, Math.ceil(ln.length * t));
+    ctx.beginPath(); ln.slice(0, n).forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+    tsh(3, 1, 2, .5); ctx.strokeStyle = '#fbf5e6'; ctx.lineWidth = 3.5; ctx.stroke();
+  }
+  tnosh(); ctx.restore();
+}
+const G3 = tornGrid(3, 1, 31), GH = tornGrid(1, 2, 41), G9 = tornGrid(3, 3, 51, 20), G12 = tornGrid(4, 3, 61, 18);
+
+// 8. קריעה לשלוש: האמצע נופל, הצדדים עפים
+function tear3(A, B, l, bf) {
+  full(B, bf, 2);
+  if (l < .28) return ripLines(A, G3, l / .28, bf);
+  const e = easeIn((l - .28) / .72), [L, M, Rr] = G3.pieces;
+  tornPiece(A, M, 0, e * 950, e * .22, 1, e, bf);
+  tornPiece(A, L, -e * 760, e * 120, -e * .45, 1, e, bf);
+  tornPiece(A, Rr, e * 760, e * 90, e * .45, 1, e, bf);
+}
+// 9. קריעה אופקית: החלק העליון נמשך למעלה, התחתון נופל
+function tearH(A, B, l, bf) {
+  full(B, bf, 2);
+  if (l < .28) return ripLines(A, GH, l / .28, bf);
+  const e = easeIn((l - .28) / .72), [T, Bo] = GH.pieces;
+  tornPiece(A, Bo, e * 60, e * 760, e * .16, 1, e, bf);
+  tornPiece(A, T, -e * 40, -e * 720, -e * .12, 1, e, bf);
+}
+// 10. קריעה לרסיסים: תשע חתיכות עפות לכל הכיוונים ונופלות
+function shatter(A, B, l, bf) {
+  full(B, bf, 2);
+  if (l < .24) return ripLines(A, G9, l / .24, bf);
+  for (const pc of [...G9.pieces].sort((a, b) => a.r3 - b.r3)) {
+    const e = clamp((l - .24 - pc.r3 * .22) / .54, 0, 1), dx = pc.cx - 640, dy = pc.cy - 360, d = Math.hypot(dx, dy) || 1;
+    const sp = 360 + pc.r1 * 120;
+    tornPiece(A, pc, dx / d * sp * e + pc.r2 * 80 * e, dy / d * sp * e - 320 * e + 1500 * e * e, pc.r1 * 1.4 * e, 1 - .12 * e, Math.min(1, e * 3), bf);
+  }
+}
+// 11. חתיכה אחרי חתיכה: קורעים ומעיפים חלק-חלק
+function peel(A, B, l, bf) {
+  full(B, bf, 2);
+  const order = [...G12.pieces].sort((a, b) => a.r3 - b.r3);
+  const moving = [];
+  order.forEach((pc, n) => {
+    const e = clamp((l - n * .058) / .3, 0, 1);
+    if (e === 0) tornPiece(A, pc, 0, 0, 0, 1, 0, bf, false);
+    else moving.push([pc, e]);
+  });
+  for (const [pc, e] of moving) {                                 // החתיכות שבתנועה מעל השאר
+    const up = Math.min(1, e / .25), fly = easeIn(clamp((e - .25) / .75, 0, 1));
+    tornPiece(A, pc, pc.r1 * 900 * fly, -60 * up - 700 * fly * (pc.r2 > 0 ? 1 : -.2) + (pc.r2 > 0 ? 0 : 900 * fly),
+              pc.r2 * .15 * up + pc.r1 * 1.2 * fly, 1 + .05 * up, up, bf);
+  }
+}
 // 12. מטוס נייר: הסצנה מתכווצת לדף, מתקפלת למטוס ועפה
 const PLANE = (() => {
   const NX = 10, NY = 6, v = [], t = [];
@@ -999,6 +1159,7 @@ kid(shlomit, 670, [
   { from: L(1, 6), to: 999, pose: 'present' },
 ]);
 dove(L(1, 6, .35), L(1, 6, .75), 1400, 120, 560, 232, 999, 40);
+window.SEG_BUILD = shlomit.segs;
 TSHIFT = 3.0; foreground(); TSHIFT = 0;
 SC.cam = [[0, 1, 640, 360], [8.6, 1, 640, 360], [10.2, 1.6, 540, 470], [12.8, 1.6, 540, 470], [14.2, 1.85, T => segX(shlomit.segs, T).x, 520],
   [19.0, 1.85, T => segX(shlomit.segs, T).x, 520], [20.6, 1.4, 690, 470], [L(1, 3, .6), 1.4, 690, 470], [L(1, 4), 1.05, 650, 380],
@@ -1200,61 +1361,151 @@ layoutLine('סוכת שלום', 96, 6).forEach(({ ch, x }, i) => {
 });
 dove(L(4, 6, .3), L(4, 6, .95), -120, 330, 1420, 250, 999, 80);
 {
-  const rb = sprite([P([[500, 632], [780, 632], [764, 664], [780, 696], [500, 696], [516, 664]], '#fff4dc', { amp: 1 })],
-    { after: g => { g.font = font(40); g.textAlign = 'center'; g.textBaseline = 'middle'; g.direction = 'rtl'; g.fillStyle = '#b83a2e'; g.fillText('חג שמח!', 640, 666); } });
-  add({ spr: rb, px: 640, py: 664, at: SONG.MUSIC_END - 2.2, noShift: true, anim: 'slide', from: [0, 200], screen: true, rot0: -.02, bbw: { h: 0 } });
+  const rb = sprite([P([[1010, 268], [1250, 268], [1236, 300], [1250, 332], [1010, 332], [1024, 300]], '#fff4dc', { amp: 1 })],
+    { after: g => { g.font = font(40); g.textAlign = 'center'; g.textBaseline = 'middle'; g.direction = 'rtl'; g.fillStyle = '#b83a2e'; g.fillText('חג שמח!', 1130, 302); } });
+  add({ spr: rb, px: 1130, py: 300, at: SONG.MUSIC_END - 2.2, noShift: true, anim: 'slide', from: [400, 0], screen: true, rot0: .04, bbw: { h: 0 } });
 }
 SC.cam = [[0, 2.1, 480, 250], [L(4, 1, .3), 2.1, 480, 250], [L(4, 2, .9), 1.8, 480, 260], [L(4, 3, .9), 1.8, 480, 260], [L(4, 4, .6), 1, 640, 360], [999, 1, 640, 360]];
 }   // buildAll
 
 // ============================================================
-//  מעברים בין הסצנות (בחלון הנשימה בין הבתים)
+//  שוטים: כל שורה בשיר מקבלת "שוט" עם תנועת מצלמה משלו (זום פנימה/החוצה),
+//  ובחלק מהמעברים בין השוטים יש מעבר נייר
 // ============================================================
 function sceneById(id) { return SCENES.find(s => s.id === id); }
-const TRANS = () => [
-  { a: 'title', b: 'build', at: 7.0, dur: 1.0, fn: rollUp },
-  { a: 'build', b: 'decor', at: 63.0, dur: 1.9, fn: pageTurn },
-  { a: 'decor', b: 'crowd', at: 105.1, dur: 2.9, fn: crumple },
-  { a: 'crowd', b: 'night', at: 146.9, dur: 2.9, fn: plane },
+const mv = (t0, t1, a, b) => [[t0, ...a], [t1, ...b]];
+const SX = T => segX(window.SEG_BUILD, T).x;
+const SHOTS_DEF = () => [
+  { s: 'title', from: 0, cam: mv(0, 99, [1, 640, 360], [1, 640, 360]) },
+  { s: 'build', from: 7.5, tr: 'rollUp', dur: 1.0, cam: mv(8.6, 13.0, [1, 640, 360], [1.65, 540, 470]) },
+  { s: 'build', from: 13.4, tr: 'newSheet', dur: 1.1, cam: [[13.4, 1.95, SX, 520], [19.2, 1.75, SX, 520]] },
+  { s: 'build', from: 19.4, cam: mv(19.4, 22.1, [1.35, 700, 470], [1.55, 640, 470]) },
+  // בית 1
+  { s: 'build', from: L(1, 1), cam: mv(L(1, 1), L(1, 2), [1.95, 820, 520], [1.35, 690, 470]) },
+  { s: 'build', from: L(1, 2), tr: 'strips', dur: 1.1, cam: mv(L(1, 2), L(1, 3), [1.15, 640, 420], [1.55, 560, 330]) },
+  { s: 'build', from: L(1, 3), cam: mv(L(1, 3), L(1, 4), [1.65, 520, 470], [1.25, 610, 430]) },
+  { s: 'build', from: L(1, 4), tr: 'tearH', dur: 1.2, cam: mv(L(1, 4), L(1, 5), [2.0, 560, 290], [1.3, 620, 370]) },
+  { s: 'build', from: L(1, 5), cam: mv(L(1, 5), L(1, 6), [1.0, 640, 360], [1.45, 540, 330]) },
+  { s: 'build', from: L(1, 6), tr: 'accordion', dur: 1.2, cam: mv(L(1, 6), 63.5, [1.85, 520, 370], [1.2, 600, 350]) },
+  // בית 2
+  { s: 'decor', from: 63.95, tr: 'pageTurn', dur: 1.9, cam: mv(64.2, L(2, 2), [1.0, 640, 360], [1.35, 980, 430]) },
+  { s: 'decor', from: L(2, 2), tr: 'newSheet', dur: 1.1, cam: mv(L(2, 2), L(2, 3), [1.7, 490, 300], [1.2, 520, 360]) },
+  { s: 'decor', from: L(2, 3), cam: mv(L(2, 3), L(2, 4), [1.9, 520, 390], [1.3, 540, 380]) },
+  { s: 'decor', from: L(2, 4), tr: 'tear', dur: 1.2, cam: mv(L(2, 4), L(2, 5), [1.7, 700, 240], [1.2, 700, 300]) },
+  { s: 'decor', from: L(2, 5), cam: mv(L(2, 5), L(2, 6), [1.0, 640, 360], [1.3, 760, 300]) },
+  { s: 'decor', from: L(2, 6), tr: 'peel', dur: 1.5, cam: mv(L(2, 6), 106, [1.75, 240, 250], [1.15, 520, 330]) },
+  // בית 3
+  { s: 'crowd', from: 106.55, tr: 'crumple', dur: 2.9, cam: mv(107.2, L(3, 2), [1.3, 860, 470], [1.0, 640, 360]) },
+  { s: 'crowd', from: L(3, 2), cam: mv(L(3, 2), L(3, 3), [1.85, 820, 380], [1.5, 820, 400]) },
+  { s: 'crowd', from: L(3, 3), tr: 'shatter', dur: 1.6, cam: mv(L(3, 3), L(3, 4), [1.0, 640, 360], [1.3, 520, 400]) },
+  { s: 'crowd', from: L(3, 4), cam: mv(L(3, 4), L(3, 5), [1.4, 1050, 470], [1.4, 260, 470]) },
+  { s: 'crowd', from: L(3, 5), tr: 'tear3', dur: 1.3, cam: mv(L(3, 5), L(3, 6), [1.0, 640, 360], [1.3, 520, 480]) },
+  { s: 'crowd', from: L(3, 6), cam: mv(L(3, 6), 147.5, [1.6, 1000, 460], [1.0, 640, 360]) },
+  // בית 4
+  { s: 'night', from: 148.35, tr: 'plane', dur: 2.9, cam: mv(148.8, L(4, 2), [2.1, 480, 250], [1.8, 480, 260]) },
+  { s: 'night', from: L(4, 2), cam: mv(L(4, 2), L(4, 3), [2.3, 440, 220], [1.9, 440, 240]) },
+  { s: 'night', from: L(4, 3), tr: 'strips', dur: 1.1, cam: mv(L(4, 3), L(4, 4), [1.5, 440, 260], [1.15, 520, 330]) },
+  { s: 'night', from: L(4, 4), tr: 'tear', dur: 1.2, cam: mv(L(4, 4), L(4, 5), [1.0, 640, 360], [1.2, 560, 380]) },
+  { s: 'night', from: L(4, 5), cam: mv(L(4, 5), L(4, 6), [1.6, 560, 520], [1.0, 640, 360]) },
+  { s: 'night', from: L(4, 6), tr: 'newSheet', dur: 1.1, cam: mv(L(4, 6), 198, [1.0, 640, 360], [1.08, 640, 360]) },
 ];
 
 
 // ============================================================
-//  הרכבה: סצנה או מעבר, ואז "מצלמה" (גרעין, וינייטה, הבהוב)
+//  הרכבה: שוט אחד או מעבר בין שני שוטים, כתוביות, ואז "מצלמה"
 // ============================================================
-function renderScene(sc, f) {
-  const T = f / FPS; ctx = sc.g; shK = DPR;
+const POOL = [0, 1].map(() => { const c = document.createElement('canvas'); c.width = W * DPR; c.height = H * DPR; return c; });
+function renderScene(sc, f, cam, canvas) {
+  const T = f / FPS; ctx = canvas.getContext('2d'); shK = DPR;
   STRETCH = sc.stretch ? sc.stretch(T) : 1;
   const jr = mulberry32(f * 31 + 7), sk_ = sc.shake(T);
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
   ctx.fillStyle = sc.bg; ctx.fillRect(0, 0, W, H);
   ctx.save(); ctx.translate((jr() - .5) * 1.6 * sk_ - 3, (jr() - .5) * 1.6 * sk_ - 3); ctx.scale((W + 6) / W, (H + 6) / H);
-  const cm = camAt(sc, T);
+  const cm = camAt({ cam }, T);
   for (const p of sc.pieces) { ctx.save(); if (!p.screen) applyCam(cm, p.k); drawPiece(p, f, f); ctx.restore(); shK = DPR; }
   ctx.restore();
+  return canvas;
 }
-const vignette = (() => { const g = mainCtx.createRadialGradient(640, 360, 250, 640, 360, 780);
-  g.addColorStop(0, 'rgba(60,30,0,0)'); g.addColorStop(1, 'rgba(50,25,0,0.42)'); return g; })();
-const grainPat = mainCtx.createPattern(TEX, 'repeat');
-let TR = [];
+const TFN = { rollUp, pageTurn, crumple, plane, strips, tearH, accordion, newSheet, tear, peel, shatter, tear3 };
+let SHOTS = [];
 function render(f) {
-  const T = f / FPS, tr = TR.find(t => T >= t.at && T < t.at + t.dur);
+  const T = f / FPS;
+  let i = SHOTS.length - 1; while (i > 0 && T < SHOTS[i].from) i--;
+  const cur = SHOTS[i], nxt = SHOTS[i + 1];
+  // מעבר פעיל? (חצי לפני נקודת ההחלפה, חצי אחריה)
+  let tr = null;
+  if (cur.tr && T < cur.from + cur.dur / 2 && i > 0) tr = { a: SHOTS[i - 1], b: cur };
+  else if (nxt && nxt.tr && T >= nxt.from - nxt.dur / 2) tr = { a: cur, b: nxt };
   if (tr) {
-    const A = sceneById(tr.a), B = sceneById(tr.b);
-    renderScene(A, f); renderScene(B, f);
+    const A = renderScene(sceneById(tr.a.s), f, tr.a.cam, POOL[0]), B = renderScene(sceneById(tr.b.s), f, tr.b.cam, POOL[1]);
     ctx = mainCtx; ctx.setTransform(DPR, 0, 0, DPR, 0, 0); table();
-    const n = Math.max(1, Math.round(tr.dur * FPS));
-    tr.fn(A.canvas, B.canvas, Math.min(1, (Math.floor((T - tr.at) * FPS + 1e-6) + 1) / n), f);
+    const d = tr.b.dur, at = tr.b.from - d / 2, n = Math.max(1, Math.round(d * FPS));
+    TFN[tr.b.tr](A, B, Math.min(1, (Math.floor((T - at) * FPS + 1e-6) + 1) / n), f);
   } else {
-    const sc = [...SCENES].reverse().find(s => T >= s.from) || SCENES[0];
-    renderScene(sc, f);
-    ctx = mainCtx; ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.drawImage(sc.canvas, 0, 0, W, H);
+    const A = renderScene(sceneById(cur.s), f, cur.cam, POOL[0]);
+    ctx = mainCtx; ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.drawImage(A, 0, 0, W, H);
   }
+  ctx = mainCtx; ctx.setTransform(DPR, 0, 0, DPR, 0, 0); shK = DPR;
+  drawSubs(f);
   const jr = mulberry32(f * 31 + 7);
   ctx.save(); ctx.globalAlpha = .42; ctx.translate(-Math.floor(jr() * 256), -Math.floor(jr() * 256));
   ctx.fillStyle = grainPat; ctx.fillRect(0, 0, W + 256, H + 256); ctx.restore();
   ctx.fillStyle = vignette; ctx.fillRect(0, 0, W, H);
   ctx.fillStyle = `rgba(30,15,0,${(jr() * .05).toFixed(3)})`; ctx.fillRect(0, 0, W, H);
+}
+const vignette = (() => { const g = mainCtx.createRadialGradient(640, 360, 250, 640, 360, 780);
+  g.addColorStop(0, 'rgba(60,30,0,0)'); g.addColorStop(1, 'rgba(50,25,0,0.42)'); return g; })();
+const grainPat = mainCtx.createPattern(TEX, 'repeat');
+
+// ============================================================
+//  כתוביות: כל מילה על פיסת נייר משלה, נכנסת עם השירה ונופלת בסוף השורה
+// ============================================================
+const SUBS = [];
+const SUB_STYLE = [
+  { papers: ['#fff4dc', '#ffe08a', '#c9e8b8', '#ffd0c2'], ink: '#5a2e14' },
+  { papers: ['#fde2ec', '#e6dcf7', '#fff0a8', '#d5f0dc'], ink: '#4a2340' },
+  { papers: ['#ffd7a8', '#cfe9ff', '#ffe7a8', '#e8f5c8'], ink: '#3a2a1c' },
+  { papers: ['#2e4280', '#44307a', '#1f5063', '#4f2e66'], ink: '#fff4dc' },
+];
+function buildSubs() {
+  if (!window.LYRICS) return;
+  const size = 62, gap = 14, Y = 642;
+  LYRICS.forEach((lines, s) => lines.forEach((line, li) => {
+    const start = L(s + 1, li + 1), end = li < 5 ? L(s + 1, li + 2) : (s < 3 ? SONG.S[s + 1] : SONG.MUSIC_END - .4);
+    const words = line.split(' ').filter(Boolean), st = SUB_STYLE[s];
+    ctx = mainCtx; ctx.font = font(size);
+    const ws = words.map(w => ctx.measureText(w).width + 36);
+    const total = ws.reduce((a, b) => a + b, 0) + gap * (ws.length - 1), k = Math.min(1, 1180 / total);
+    let xr = 640 + total * k / 2;
+    const span = (end - start) * .62;
+    const ww = words.map((w, i) => {
+      const cx = xr - ws[i] * k / 2; xr -= (ws[i] + gap) * k;
+      const pw = ws[i], ph = 86, col = st.papers[(i + li) % st.papers.length], torn = (i + li + s) % 3 === 0;
+      const paths = [P(rect(-pw / 2, -ph / 2, pw, ph), col, { amp: 1.3, step: 14, ...(torn ? { torn: 2.6 } : {}) })];
+      if ((i + li) % 4 === 1) paths.push(P([[-16, -ph / 2 - 8], [18, -ph / 2 - 12], [20, -ph / 2 + 8], [-14, -ph / 2 + 12]], 'rgba(255,252,235,.6)', { detail: true, amp: .4, step: 10 }));
+      const spr = sprite(paths, { after: g => { g.font = font(size); g.textAlign = 'center'; g.textBaseline = 'middle'; g.direction = 'rtl';
+        sh(g, 1.2, .6, .9, 'rgba(0,0,0,.25)'); g.fillStyle = st.ink; g.fillText(w, 0, 3); sh(g, 0, 0, 0, 'rgba(0,0,0,0)'); } });
+      return { spr, x: cx, y: Y + (i % 2 ? -5 : 4), rot: rnd(-.09, .09), k, at: start + .12 + i * span / words.length, dir: i % 2 ? 1 : -1, seed: SUBS.length * 17 + i };
+    });
+    SUBS.push({ start, end, words: ww });
+  }));
+}
+function drawSubs(f) {
+  const T = f / FPS;
+  for (const line of SUBS) {
+    if (T < line.start || T > line.end + 1) continue;
+    const kout = f - appearF(line.end - .3);
+    for (const w of line.words) {
+      const kin = f - appearF(w.at); if (kin < 0) continue;
+      if (kout >= 6) continue;
+      const jr = mulberry32(f * 97 + w.seed);
+      let sc = kin < 3 ? [.5, 1.15, .95][kin] : 1, dy = kin < 3 ? [-34, -8, 2][kin] : 0, rot = w.rot, dx = 0;
+      if (kout >= 0) { dy += (kout + 1) * (kout + 1) * 16; rot += (kout + 1) * .28 * w.dir; dx = (kout + 1) * 10 * w.dir; }
+      ctx.save(); ctx.translate(w.x + dx + (jr() - .5) * 2, w.y + dy + (jr() - .5) * 2); ctx.rotate(rot + (jr() - .5) * .02); ctx.scale(sc * w.k, sc * w.k);
+      place(w.spr, 0, 0, 0, .9); ctx.restore();
+    }
+  }
 }
 
 // ============================================================
@@ -1266,7 +1517,7 @@ let audioReady = false, playing = false, t0 = 0, pausedAt = 0, last = -1;
 const nowT = () => audioReady ? audio.currentTime : (playing ? (performance.now() - t0) / 1000 : pausedAt);
 function tick() {
   let T = nowT();
-  if (T >= SONG.END) { if (!audioReady) { t0 = performance.now(); T = 0; } }
+  if (T >= SONG.END && !audioReady) { t0 = performance.now(); T = 0; }
   const f = Math.floor(Math.min(T, SONG.END) * FPS);
   if (f !== last) { last = f; render(f); }
   requestAnimationFrame(tick);
@@ -1291,7 +1542,7 @@ document.getElementById('song').onchange = async e => {
 };
 
 Promise.race([Promise.all([document.fonts.load('84px "Secular One"'), document.fonts.load('28px Rubik')]).catch(() => {}), new Promise(r => setTimeout(r, 2000))]).then(() => {
-  buildAll(); TR = TRANS();
+  buildAll(); SHOTS = SHOTS_DEF(); buildSubs();
   window.renderFrame = f => { render(f); return cv.toDataURL('image/jpeg', .92); };
   const fz = new URLSearchParams(location.search).get('frame');
   if (fz !== null) { render(+fz); window.__ready = true; return; }
