@@ -47,7 +47,7 @@
   <span class="file"><span class="btn accent">♪ הוספת השיר</span><input type="file" id="song" accept="audio/*" aria-label="בחירת קובץ השיר"></span>
   <button class="btn" id="rec" type="button">⬇ שמירה כווידאו</button>
 </div>
-<p id="msg" aria-live="polite">תצוגה מקדימה של 16 שניות. אפשר להוסיף קובץ שמע של השיר מהמכשיר.</p>
+<p id="msg" aria-live="polite">תצוגה מקדימה של 15 שניות. אפשר להוסיף קובץ שמע של השיר מהמכשיר.</p>
 </div>
 
 <script>
@@ -57,7 +57,8 @@
 //  גזורים/קרועים וצל, והיא זזה טיפה בכל פריים כמו בצילום אמיתי.
 // ============================================================
 const W = 1280, H = 720, FPS = 8;       // 8 פריימים לשנייה: סטופ-מושן
-const PREVIEW = 16;                     // תצוגה מקדימה: 16 השניות הראשונות
+const PREVIEW = 15;                     // תצוגה מקדימה: 15 השניות הראשונות
+const SCENE_SHIFT = -1.6;               // הסצנה מתחילה מוקדם יותר (הכותרת מהירה יותר)
 const SCALE = 1;
 const LOOPF = PREVIEW * FPS;
 
@@ -128,7 +129,8 @@ function tr(g, polys) {
     g.closePath();
   }
 }
-function sh(g, b, x, y, c, k = DPR) { g.shadowBlur = b * k; g.shadowOffsetX = x * k; g.shadowOffsetY = y * k; g.shadowColor = c; }
+let shK = DPR;                          // גודל הצל תלוי בזום הנוכחי
+function sh(g, b, x, y, c, k = shK) { g.shadowBlur = b * k; g.shadowOffsetX = x * k; g.shadowOffsetY = y * k; g.shadowColor = c; }
 
 // ---------- מרקם נייר (כתמים, סיבים, גרעין) ----------
 const TEX = (() => {
@@ -162,9 +164,11 @@ function sprite(paths, o = {}) {
   const pad = o.pad ?? 10;
   const bb = o.bb || bboxOf(paths.flatMap(p => p.fringe ? p.fringe.concat(p.polys) : p.polys));
   const w = Math.ceil(bb.w + pad * 2), h = Math.ceil(bb.h + pad * 2);
-  const c = document.createElement('canvas'); c.width = Math.ceil(w * DPR); c.height = Math.ceil(h * DPR);
+  // רזולוציה גבוהה, כדי שהגזירים יישארו חדים גם כשהמצלמה מתקרבת
+  const SS = w * h > 250000 ? DPR * 1.2 : w * h > 60000 ? DPR * 1.5 : DPR * 2.2, prevK = shK; shK = SS;
+  const c = document.createElement('canvas'); c.width = Math.ceil(w * SS); c.height = Math.ceil(h * SS);
   const g = c.getContext('2d');
-  g.scale(DPR, DPR); g.translate(pad - bb.x, pad - bb.y);
+  g.scale(SS, SS); g.translate(pad - bb.x, pad - bb.y);
   for (const p of paths) {
     if (p.fringe) { tr(g, p.fringe); g.fillStyle = p.fringeColor; g.fill(); }
     if (p.detail) sh(g, 3, 1.2, 1.8, 'rgba(40,24,10,.4)');
@@ -177,6 +181,7 @@ function sprite(paths, o = {}) {
   g.save(); g.translate(-Math.floor(R() * 256), -Math.floor(R() * 256));
   g.fillStyle = g.createPattern(TEX, 'repeat'); g.fillRect(bb.x - pad, bb.y - pad, w + 512, h + 512);
   g.restore();
+  shK = prevK;
   return { c, x: bb.x - pad, y: bb.y - pad, w, h, pad };
 }
 function place(spr, x, y, rot = 0, depth = 1) {
@@ -194,6 +199,8 @@ function add(o) {
   if (o.jit === undefined) o.jit = 1;
   if (o.depth === undefined) o.depth = 1;
   if (o.rot0 === undefined) o.rot0 = rnd(-0.008, 0.008);     // אף פיסה לא מודבקת ישר לגמרי
+  if (o.k === undefined) o.k = 1;                              // שכבת עומק: 0 = רחוק, 1 = הבמה, >1 = קדמה
+  if (!o.group && !o.noShift) { o.at = (o.at || 0) + SCENE_SHIFT; if (o.until !== undefined) o.until += SCENE_SHIFT; }
   S.push(o); return o;
 }
 // פיסה עם קואורדינטות עולם: הציר הוא (px,py)
@@ -219,7 +226,7 @@ function animState(p, k) {
     case 'flip': st.sx = Math.cos(Math.PI * (1 - l)); st.dy = -(1 - l) * 24; break;
     case 'rise': st.dy = [.75, .3, -.03][k] * p.bbw.h; st.clipY = p.base; break;
     case 'unroll': st.reveal = [.2, .4, .6, .8, .94][k]; break;
-    case 'unrollX': st.revealX = [.12, .3, .48, .66, .84, .96][k]; break;
+    case 'unrollX': st.revealX = (k + 1) / n * .96; break;
   }
   return st;
 }
@@ -273,67 +280,128 @@ const C = {
 };
 const PAPER = ['#e3343f', '#f2b134', '#2f86d6', '#4caf50', '#ef7a36', '#8e55b8'];
 
-piece([P(rect(0, 0, W, H), C.sky, { raw: true, edge: false })], { depth: 0, jit: 0, rot0: 0 });
+piece([P(rect(-100, -60, W + 200, H + 120), C.sky, { raw: true, edge: false })], { depth: 0, jit: 0, rot0: 0, k: .15 });
 {
   const pts = [];
-  for (let x = -40; x <= 1320; x += 60) pts.push([x, 330 + 14 * Math.sin(x / 150)]);
-  pts.push([1320, 760], [-40, 760]);
-  piece([P(pts, C.sky2, { torn: 3 })], { depth: .3, jit: .3, rot0: 0 });
+  for (let x = -60; x <= 1340; x += 60) pts.push([x, 330 + 14 * Math.sin(x / 150)]);
+  pts.push([1340, 780], [-60, 780]);
+  piece([P(pts, C.sky2, { torn: 3 })], { depth: .3, jit: .3, rot0: 0, k: .3 });
 }
-{ // שמש
+{ // שמש עם פנים
   const SX = 1130, SY = 118, rays = [];
   for (let i = 0; i < 12; i++) {
     const a = i / 12 * Math.PI * 2;
     rays.push([[Math.cos(a - .16) * 56, Math.sin(a - .16) * 56], [Math.cos(a) * 100, Math.sin(a) * 100],
                [Math.cos(a + .16) * 56, Math.sin(a + .16) * 56]].map(([x, y]) => [x + SX, y + SY]));
   }
-  piece([P(rays, C.ray, { amp: 1.2, step: 12 }), P(ell(SX, SY, 60), C.sun, { amp: 1 }), P(ell(SX, SY, 40), C.sunIn, { detail: true, amp: .8 })],
-        { at: 5.5, anim: 'roll', from: [420, 0], radius: 100, px: SX, py: SY });   // השמש מתגלגלת פנימה
+  const arc = (cx, cy, r, a0, a1, th) => { const o = []; for (let a = a0; a <= a1 + 1e-6; a += (a1 - a0) / 6) o.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    for (let a = a1; a >= a0 - 1e-6; a -= (a1 - a0) / 6) o.push([cx + (r - th) * Math.cos(a), cy + (r - th) * Math.sin(a)]); return o; };
+  piece([P(rays, C.ray, { amp: 1.2, step: 12 }), P(ell(SX, SY, 60), C.sun, { amp: 1 }), P(ell(SX, SY, 44), C.sunIn, { detail: true, amp: .8 }),
+         P([arc(SX - 17, SY - 10, 9, .15 * Math.PI, .85 * Math.PI, 2.6), arc(SX + 17, SY - 10, 9, .15 * Math.PI, .85 * Math.PI, 2.6)], '#9a5a1c', { detail: true, amp: .2, step: 30 }),
+         P(arc(SX, SY + 4, 18, .2 * Math.PI, .8 * Math.PI, 3.5), '#b9472a', { detail: true, amp: .2, step: 30 }),
+         P([ell(SX - 30, SY + 10, 8, 5), ell(SX + 30, SY + 10, 8, 5)], '#f59a6a', { detail: true, amp: .4 })],
+        { at: 5.5, anim: 'roll', from: [420, 0], radius: 100, px: SX, py: SY, k: .2 });   // השמש מתגלגלת פנימה
 }
 function cloud(cx, cy, k, at, from) {
-  const bits = [[-60, 10, 32], [-22, -10, 42], [26, -4, 36], [62, 12, 26]].map(([x, y, r]) => ell(cx + x * k, cy + y * k, r * k));
-  bits.push(ell(cx, cy + 20 * k, 80 * k, 18 * k));
-  piece([P(bits, C.cloud, { amp: 1.2, step: 10, torn: 2.5, fringeColor: '#ffffff' })], { at, anim: 'slide', from, depth: .7 });
+  const bits = off => [[-60, 10, 32], [-22, -10, 42], [26, -4, 36], [62, 12, 26]].map(([x, y, r]) => ell(cx + x * k + off, cy + y * k + off, r * k))
+    .concat([ell(cx + off, cy + 20 * k + off, 80 * k, 18 * k)]);
+  piece([P(bits(7), '#dbe9ee', { amp: 1.2, step: 10 }), P(bits(0), C.cloud, { amp: 1.2, step: 10, torn: 2.5, fringeColor: '#ffffff' })],
+        { at, anim: 'slide', from, depth: .7, k: .3 });
 }
-cloud(190, 180, 1, 5.8, [-420, 0]); cloud(1000, 275, .8, 6.0, [360, 0]);
+cloud(190, 180, 1, 5.8, [-420, 0]); cloud(1000, 275, .8, 6.0, [360, 0]); cloud(620, 120, .55, 6.2, [0, -200]);
+const hill1Y = x => 478 + 26 * Math.sin(x / 190 + 0.4) + 10 * Math.sin(x / 60);
 {
   const pts = [];
-  for (let x = -40; x <= 1320; x += 40) pts.push([x, 478 + 26 * Math.sin(x / 190 + 0.4) + 10 * Math.sin(x / 60)]);
-  pts.push([1320, 760], [-40, 760]);
-  piece([P(pts, C.hill1, { torn: 3.5 })], { depth: .6, jit: .5, rot0: 0 });
+  for (let x = -60; x <= 1340; x += 40) pts.push([x, hill1Y(x)]);
+  pts.push([1340, 780], [-60, 780]);
+  // שדות מעובדים: פסים של נייר בגוונים
+  const fields = [];
+  for (let i = 0; i < 5; i++) { const x0 = 40 + i * 260 + rnd(-30, 30); fields.push([[x0, hill1Y(x0) + 22], [x0 + 150, hill1Y(x0 + 150) + 22], [x0 + 170, hill1Y(x0 + 170) + 48], [x0 + 20, hill1Y(x0 + 20) + 48]]); }
+  piece([P(pts, C.hill1, { torn: 3.5 }), P(fields, '#b8d98c', { detail: true, amp: 1 })], { depth: .6, jit: .5, rot0: 0, k: .5 });
 }
+// כפר רחוק: בתים עם גגות אדומים, מגדל מים וברושים
+function house(x, s, at) {
+  const y = hill1Y(x) + 10;
+  piece([P(rect(x - 18 * s, y - 26 * s, 36 * s, 28 * s), '#f4ecd8', { amp: .6, step: 10 }),
+         P([[x - 24 * s, y - 25 * s], [x, y - 46 * s], [x + 24 * s, y - 25 * s]], '#c8553d', { amp: .6, step: 10 }),
+         P([rect(x - 12 * s, y - 20 * s, 7 * s, 7 * s), rect(x + 5 * s, y - 20 * s, 7 * s, 7 * s)], '#6aa3c8', { detail: true, amp: .3 }),
+         P(rect(x - 3 * s, y - 11 * s, 6 * s, 12 * s), '#8a5530', { detail: true, amp: .3 })],
+        { at, anim: 'pop', px: x, py: y, depth: .5, k: .5, jit: .6 });
+}
+house(300, 1, 5.9); house(352, .85, 6.0); house(870, .9, 6.1); house(925, 1.05, 6.2);
+{
+  const x = 800, y = hill1Y(800) + 8;
+  piece([P([rect(x - 16, y - 50, 4, 52), rect(x + 12, y - 50, 4, 52), [[x - 14, y - 30], [x + 14, y - 12], [x + 14, y - 8], [x - 14, y - 26]]], '#9a8f80', { amp: .4, step: 10 }),
+         P(rect(x - 22, y - 86, 44, 38), '#dcd3c3', { amp: .7, step: 10 }), P([[x - 25, y - 85], [x, y - 102], [x + 25, y - 85]], '#b9b0a0', { amp: .6, step: 10 }),
+         P(rect(x - 22, y - 70, 44, 4), '#9a8f80', { detail: true, amp: .3 })], { at: 6.0, anim: 'pop', px: x, py: y, depth: .5, k: .5, jit: .6 });
+}
+[[232, 1], [1012, .9], [1040, 1.1], [390, .8]].forEach(([x, s], i) => {
+  const y = hill1Y(x) + 12;
+  piece([P(ell(x, y - 34 * s, 9 * s, 36 * s), '#3f7a3a', { amp: .8, step: 10 }), P(ell(x - 3 * s, y - 40 * s, 3 * s, 20 * s), '#57924b', { detail: true, amp: .4 })],
+        { at: 5.9 + i * .1, anim: 'pop', px: x, py: y, depth: .5, k: .5, jit: .6 });
+});
 function tree(x, y, r, at) {
   piece([P(rect(x - 6, y - r - 10, 12, r + 12), C.woodD, { amp: .8 }), P(ell(x, y - r - 16, r, r * 1.1), C.leaf),
-         P(ell(x - r * .3, y - r - 24, r * .45), '#78b65a', { detail: true, amp: .7 })], { at, anim: 'pop', px: x, py: y, depth: .7 });
+         P(ell(x - r * .3, y - r - 24, r * .45), '#78b65a', { detail: true, amp: .7 }),
+         P([ell(x + r * .3, y - r - 6, 4), ell(x - r * .1, y - r - 30, 4), ell(x + r * .45, y - r - 28, 3.5)], '#e3343f', { detail: true, amp: .3 })],
+        { at, anim: 'pop', px: x, py: y, depth: .7, k: .55 });
 }
 tree(110, 470, 34, 6.0); tree(1175, 470, 30, 6.2); tree(1075, 492, 22, 6.4);
+const hill2Y = x => 548 + 22 * Math.sin(x / 130 + 1.3);
 {
   const pts = [];
-  for (let x = -40; x <= 1320; x += 40) pts.push([x, 548 + 22 * Math.sin(x / 130 + 1.3)]);
-  pts.push([1320, 760], [-40, 760]);
-  piece([P(pts, C.hill2, { torn: 3.5 })], { depth: .7, jit: .5, rot0: 0 });
+  for (let x = -60; x <= 1340; x += 40) pts.push([x, hill2Y(x)]);
+  pts.push([1340, 780], [-60, 780]);
+  const bushes = [];
+  for (const x of [40, 330, 470, 980, 1215]) bushes.push(ell(x - 14, hill2Y(x) + 2, 20, 14), ell(x + 10, hill2Y(x) - 4, 24, 18), ell(x + 32, hill2Y(x) + 4, 16, 12));
+  piece([P(bushes, '#5f9c4c', { amp: .8, step: 10 }), P(pts, C.hill2, { torn: 3.5 })], { depth: .7, jit: .5, rot0: 0, k: .7 });
+}
+// גדר עץ לבנה מאחורי שלומית
+{
+  const pick = [];
+  for (let x = 1000; x < 1330; x += 27) pick.push([[x, 562], [x + 8, 548], [x + 16, 562], [x + 16, 622], [x, 622]]);
+  piece([P([rect(990, 570, 350, 8), rect(990, 598, 350, 8)], '#d6c29a', { amp: .7 }), P(pick, '#f3e6c9', { amp: .7, step: 12 })],
+        { at: 0, depth: .8, jit: .5, k: .95 });
 }
 const groundY = x => 612 + 6 * Math.sin(x / 70);
 {
   const pts = [];
-  for (let x = -40; x <= 1320; x += 40) pts.push([x, groundY(x)]);
-  pts.push([1320, 760], [-40, 760]);
-  piece([P(pts, C.ground, { torn: 3.5 })], { depth: .9, jit: .5, rot0: 0 });
+  for (let x = -60; x <= 1340; x += 40) pts.push([x, groundY(x)]);
+  pts.push([1340, 780], [-60, 780]);
+  piece([P(pts, C.ground, { torn: 3.5 }), P([ell(80, 700, 60, 10), ell(620, 700, 140, 12), ell(1100, 708, 90, 10)], '#6aad52', { detail: true, amp: 1.2 })],
+        { depth: .9, jit: .5, rot0: 0 });
   const tufts = [];
-  for (let x = -10; x < 1290; x += rnd(20, 34)) {
+  for (let x = -40; x < 1320; x += rnd(18, 30)) {
     const g = groundY(x + 6);
     tufts.push([[x, g + 5], [x + 4, g - rnd(9, 16)], [x + 7, g + 1], [x + 10, g - rnd(8, 14)], [x + 14, g + 5]]);
   }
   piece([P(tufts, C.tuft, { amp: .6, step: 8 })], { at: .2, anim: 'pop', jit: .5, px: 640, py: 612 });
+  const stones = [[180, 648, 12], [860, 700, 9], [960, 690, 14], [1240, 650, 10], [420, 690, 8]];
+  piece([P(stones.map(([x, y, r]) => ell(x, y, r, r * .7)), '#a8a39a', { amp: .6 }),
+         P(stones.map(([x, y, r]) => ell(x - r * .3, y - r * .25, r * .4, r * .25)), '#cfcac0', { detail: true, amp: .3 })], { at: .2, anim: 'pop', jit: .6, px: 640, py: 680 });
 }
 function flower(x, y, col, at) {
   const petals = [];
   for (let i = 0; i < 5; i++) { const a = i / 5 * Math.PI * 2; petals.push(ell(x + Math.cos(a) * 10, y + Math.sin(a) * 10, 8)); }
-  piece([P(rect(x - 2, y, 4, 36), C.tuft, { amp: .5, step: 8 }), P(petals, col, { amp: .8, step: 8 }), P(ell(x, y, 6), '#f2b134', { detail: true, amp: .5 })],
+  piece([P(rect(x - 2, y, 4, 36), C.tuft, { amp: .5, step: 8 }), P([[x, y + 22], [x - 16, y + 12], [x - 4, y + 26]], '#5fb043', { amp: .4, step: 8 }),
+         P(petals, col, { amp: .8, step: 8 }), P(ell(x, y, 6), '#f2b134', { detail: true, amp: .5 })],
         { at, anim: 'pop', px: x, py: y + 30 });
 }
 flower(60, 670, '#e3343f', 6.3); flower(140, 694, '#ffffff', 6.5); flower(215, 662, '#8e55b8', 6.7);
-flower(1235, 700, '#ef7a36', 6.4);
+flower(1235, 700, '#ef7a36', 6.4); flower(1175, 676, '#f2b134', 6.6);
+// פרפרים: מנפנפים בכנפיים פריים-פריים
+function butterfly(x, y, col, at, seed) {
+  const wing = open => sprite(open
+    ? [P([ell(-9, -5, 9, 7, -.4), ell(9, -5, 9, 7, .4), ell(-7, 5, 6, 5, .4), ell(7, 5, 6, 5, -.4)], col, { amp: .4, step: 6 }),
+       P([ell(-10, -6, 3, 2), ell(10, -6, 3, 2)], '#fffaf0', { detail: true, amp: .2 }), P(rect(-1.5, -9, 3, 18), '#3a2a2a', { detail: true, amp: .2 })]
+    : [P([ell(-4, -6, 4, 9, -.2), ell(4, -6, 4, 9, .2)], col, { amp: .4, step: 6 }), P(rect(-1.5, -9, 3, 18), '#3a2a2a', { detail: true, amp: .2 })]);
+  const A = wing(true), B = wing(false);
+  add({ at, k: 1, draw(cf, bf) {
+    const r = mulberry32(bf * 17 + seed), t = cf / FPS;
+    place(bf % 2 ? A : B, x + 26 * Math.sin(t * .9 + seed) + (r() - .5) * 3, y + 14 * Math.sin(t * 1.7 + seed) + (r() - .5) * 3, (r() - .5) * .4, .6);
+  } });
+}
+butterfly(150, 610, '#f2b134', 6.8, 1); butterfly(1190, 590, '#8e55b8', 7.4, 2);
 
 // ============================================================
 //  הסוכה (מוזזת 120 פיקסלים שמאלה, כדי לפנות מקום לשלומית)
@@ -358,7 +426,10 @@ const rollSpr = (w, col) => sprite([P(rect(-w / 2 - 4, -8, w + 8, 16), col, { am
   s.roll = rollSpr(304, '#e6d6b0');
 }
 function post(x, y, w, h, at) {
-  sk([P(rect(x, y, w, h), C.wood), P(rect(x + w * .25, y + 8, w * .18, h - 16), C.woodL, { detail: true, amp: .6 })],
+  const grain = [];
+  for (let i = 0; i < 4; i++) { const gx = x + w * rnd(.45, .85), gy = y + rnd(20, h - 90); grain.push(rect(gx, gy, 1.3, rnd(30, 70))); }
+  sk([P(rect(x, y, w, h), C.wood), P(rect(x + w * .25, y + 8, w * .18, h - 16), C.woodL, { detail: true, amp: .6 }),
+      P(grain, '#7a4826', { detail: true, amp: .3, step: 20 }), P([ell(x + w / 2, y + 12, 2.6, 2.6, 0, 6)], '#6b6f75', { detail: true, amp: .2 })],
      { at, anim: 'rise', base: y + h, px: x + w / 2, py: y + h });
 }
 post(470, 268, 18, 312, 10.8); post(792, 268, 18, 312, 11.4);
@@ -441,21 +512,34 @@ function frondPaths(cx, cy, len, ang, col) {
     .forEach(([x, y, len], i) => sk(frondPaths(x, y, len, rnd(-.14, .14), cols[i % cols.length]), { at: 20.6 + i * 0.62, anim: 'drop', spinDir: i % 2 ? 1 : -1 }));
 }
 // ערימת קרשים שהביאה שלומית
-piece([P(rect(1000, 652, 128, 11), C.wood), P(rect(1008, 641, 118, 11), C.woodL), P(rect(996, 663, 134, 11), C.woodD)],
+piece([P(rect(1000, 652, 128, 11), C.wood), P(rect(1008, 641, 118, 11), C.woodL), P(rect(996, 663, 134, 11), C.woodD),
+       P([rect(1020, 656, 40, 1.3), rect(1070, 645, 36, 1.3), rect(1030, 667, 50, 1.3)], '#6a3c1e', { detail: true, amp: .2, step: 20 })],
       { at: 9.4, until: 30, anim: 'tumble', from: [60, -140], turns: .5 });
+// ארגז כלים עם מסור
+piece([P([[1150, 636], [1224, 636], [1224, 628], [1150, 628]], '#b9bec4', { amp: .5, step: 10 }),
+       P([[1160, 630], [1236, 612], [1238, 620], [1162, 636]], '#aeb4ba', { amp: .4, step: 8 }), P(rect(1226, 606, 18, 12), C.woodL, { amp: .4 }),
+       P(rect(1144, 638, 88, 34), '#c8453a', { amp: .8, step: 12 }), P(rect(1144, 646, 88, 4), '#e8735f', { detail: true, amp: .3 }),
+       P([rect(1176, 624, 24, 5), rect(1174, 624, 5, 16), rect(1197, 624, 5, 16)], '#3a3a44', { amp: .3 })],
+      { at: 9.7, anim: 'drop', dist: 200, spin: -.4 });
 
 // ============================================================
 //  בובות נייר: שלומית והחברים
 // ============================================================
 function makeKid(o) {
   const k = { o };
-  const leg = side => sprite([P(rect(-6, -4, 12, 68), o.legs, { amp: .8, step: 12 }), P(ell(side * 3, 66, 13, 7), o.shoe, { amp: .7 })]);
+  const leg = side => sprite([P(rect(-6, -4, 12, 68), o.legs, { amp: .8, step: 12 }),
+    P(rect(-6.5, 50, 13, 10), o.sock || '#fffaf0', { amp: .4, step: 8 }),                 // גרביים
+    P(ell(side * 3, 66, 13, 7), o.shoe, { amp: .7 }),
+    P(rect(-7 + side * 3, 60, 14, 2.5), 'rgba(255,255,255,.55)', { detail: true, amp: .2 })]);
   k.legL = leg(-1); k.legR = leg(1);
   if (o.dress) {
     const dots = [[-24, -80], [0, -92], [22, -78], [-12, -116], [13, -120], [-34, -70], [34, -70], [8, -72]].map(([x, y]) => ell(x, y, 4.2));
     k.body = sprite([P([[-24, -152], [24, -152], [48, -64], [-48, -64]], o.top),
       P(dots, '#fffaf0', { detail: true, amp: .4, step: 6 }),
-      P([[-13, -152], [13, -152], [9, -142], [0, -137], [-9, -142]], '#fffaf0', { detail: true, amp: .5, step: 6 })]);
+      P([[-13, -152], [13, -152], [9, -142], [0, -137], [-9, -142]], '#fffaf0', { detail: true, amp: .5, step: 6 }),
+      P([[-45, -74], [45, -74], [47.5, -65], [-47.5, -65]], '#fffaf0', { detail: true, amp: .5, step: 10 }),         // פס בשולי השמלה
+      P(rect(12, -110, 17, 15), o.pocket || '#f7a07a', { detail: true, amp: .5, step: 8 }),                         // כיס
+      P([ell(20.5, -103, 3.2, 3.2, 0, 6)], '#e3343f', { detail: true, amp: .2 })]);
   } else {
     k.body = sprite([P(rect(-25, -98, 50, 30), o.legs), P(rect(-27, -152, 54, 58), o.top),
       P([rect(-27, -136, 54, 6), rect(-27, -118, 54, 6)], o.stripe, { detail: true, amp: .5, step: 10 })]);
@@ -478,7 +562,11 @@ function makeKid(o) {
     P([ell(-11, -44, 3.4, 4.6, 0, 8), ell(11, -44, 3.4, 4.6, 0, 8)], '#2b1d14', { detail: true, amp: .2 }),
     P([ell(-19, -33, 6, 4, 0, 8), ell(19, -33, 6, 4, 0, 8)], '#f19a86', { detail: true, amp: .3 }),
     P(smile, '#a8323a', { detail: true, amp: .2, step: 20 }),
-    P(fringe, o.hairCol, { detail: true, amp: .8, step: 10 })];
+    P([ell(-10, -45.5, 1.3, 1.3, 0, 6), ell(12, -45.5, 1.3, 1.3, 0, 6)], '#ffffff', { detail: true, amp: .1 }),      // ברק בעיניים
+    P(ell(0, -37.5, 3.2, 2.4, 0, 8), '#e8a07c', { detail: true, amp: .2 }),                                        // אף
+    P([[[-16, -52], [-6, -54.5], [-6, -52.5], [-16, -50]], [[16, -52], [6, -54.5], [6, -52.5], [16, -50]]], o.hairCol, { detail: true, amp: .2, step: 20 }),
+    P(fringe, o.hairCol, { detail: true, amp: .8, step: 10 }),
+    P([rect(-18, -74, 1.4, 12), rect(-6, -80, 1.4, 16), rect(8, -79, 1.4, 14), rect(20, -73, 1.4, 11)], 'rgba(255,255,255,.28)', { detail: true, amp: .2, step: 20 })];
   if (o.kippah) head.push(P(ell(0, -82, 17, 6), o.kippah, { detail: true, amp: .5 }));
   k.head = sprite(head);
   // שיער מאחור
@@ -487,6 +575,7 @@ function makeKid(o) {
     const pl = [ell(0, -50, 38, 38)];
     for (const s of [-1, 1]) pl.push(ell(s * 35, -28, 9, 11), ell(s * 38, -10, 9, 11), ell(s * 41, 8, 8, 10));
     back.push(P(pl, o.hairCol, { amp: .8, step: 10 }));
+    back.push(P([-1, 1].flatMap(s2 => [-19, -1].map(y => rect(s2 * 37 - 6, y, 12, 1.6))), 'rgba(0,0,0,.25)', { detail: true, amp: .2, step: 20 }));
     back.push(P([[[-42, 22], [-58, 12], [-57, 33]], [[-42, 22], [-27, 12], [-28, 33]], [[42, 22], [58, 12], [57, 33]], [[42, 22], [27, 12], [28, 33]]], o.bow, { detail: true, amp: .4, step: 8 }));
   } else if (o.hair === 'pony') {
     back.push(P([ell(0, -50, 37, 37), ell(40, -34, 12, 30, -.5)], o.hairCol, { amp: .8, step: 10 }));
@@ -521,14 +610,19 @@ function pose(name, walk, ph) {
   }
   return q;
 }
-function kid(k, y, segs, id) {
-  add({ at: segs[0].from, id, draw(cf, bf) {
-    const bt = cf / FPS / SCALE;
-    let seg = null, x = segs[0].x0;
-    for (const s of segs) { if (s.x1 !== undefined) x = s.x1; else if (s.x0 !== undefined) x = s.x0; if (bt >= s.from && bt < s.to) { seg = s; break; } }
+function segX(segs, bt) {
+  let seg = null, x = segs[0].x0;
+  for (const s of segs) { if (bt >= s.from && bt < s.to) { seg = s; break; } if (s.x1 !== undefined) x = s.x1; else if (s.x0 !== undefined) x = s.x0; }
+  if (seg && seg.x1 !== undefined) x = seg.x0 + (seg.x1 - seg.x0) * clamp((bt - seg.from) / (seg.to - seg.from), 0, 1);
+  else if (seg && seg.x0 !== undefined) x = seg.x0;
+  return { seg, x };
+}
+function kid(k, y, segs) {
+  segs.forEach(s => { s.from += SCENE_SHIFT; s.to += SCENE_SHIFT; });
+  k.segs = segs;
+  add({ at: segs[0].from, noShift: true, draw(cf, bf) {
+    const { seg, x } = segX(segs, cf / FPS / SCALE);
     if (!seg) return;
-    if (seg.x1 !== undefined) x = seg.x0 + (seg.x1 - seg.x0) * clamp((bt - seg.from) / (seg.to - seg.from), 0, 1);
-    else if (seg.x0 !== undefined) x = seg.x0;
     const ph = (cf + (seg.phase || 0)) % 2, q = pose(seg.pose, seg.walk, ph);
     const jr = mulberry32(bf * 131 + k.o.seed), J = () => jr() - .5;
     ctx.save();
@@ -556,8 +650,8 @@ kid(boy, 676, [{ from: 33.8, to: 35.3, pose: 'stand', walk: true, x0: 1420, x1: 
 kid(girl, 666, [{ from: 34.3, to: 35.9, pose: 'stand', walk: true, x0: 1440, x1: 1190 }, { from: 35.9, to: 36.2, pose: 'stand' },
                 { from: 36.2, to: 1e9, pose: 'cheer' }]);
 kid(shlomit, 670, [
-  { from: 6.6, to: 9.4, pose: 'carry', walk: true, x0: 1420, x1: 905 },
-  { from: 9.4, to: 9.9, pose: 'stand', x0: 905 },
+  { from: 6.6, to: 9.4, pose: 'carry', walk: true, x0: 1420, x1: 860 },
+  { from: 9.4, to: 9.9, pose: 'stand', x0: 860 },
   { from: 9.9, to: 15.2, pose: 'hammer' },
   { from: 15.2, to: 15.8, pose: 'stand' },
   { from: 15.8, to: 20, pose: 'present' },
@@ -570,7 +664,7 @@ kid(shlomit, 670, [
 // ============================================================
 //  כרטיס הפתיחה (קבוצה 'title'): נגלל למעלה כמו מגילה וחושף את הסצנה
 // ============================================================
-const ROLL_AT = 4.6, ROLL_N = 8;
+const ROLL_AT = 3.0, ROLL_N = 8;
 const title = (paths, o) => piece(paths, Object.assign({ group: 'title' }, o));
 {
   const dashes = [];                                        // "תפר" של רצועות נייר קטנות מסביב
@@ -580,29 +674,29 @@ const title = (paths, o) => piece(paths, Object.assign({ group: 'title' }, o));
         { depth: 0, jit: 0, rot0: 0 });
 }
 // ענפי דקל מתגלגלים לפינות
-[[170, 120, 320, -.55, [-420, -260], 0.1], [1110, 120, 320, .55, [420, -260], 0.3],
- [150, 610, 300, .5, [-420, 260], 0.5], [1130, 610, 300, -.5, [420, 260], 0.7]]
+[[170, 120, 320, -.55, [-420, -260], 0], [1110, 120, 320, .55, [420, -260], 0.1],
+ [150, 610, 300, .5, [-420, 260], 0.2], [1130, 610, 300, -.5, [420, 260], 0.3]]
   .forEach(([x, y, len, ang, from, at], i) =>
-    title(frondPaths(x, y, len, ang, ['#4f9d3a', '#5fb043', '#3f8a34', '#74b94a'][i]), { at, anim: 'tumble', from, turns: i % 2 ? -.6 : .6 }));
+    title(frondPaths(x, y, len, ang, ['#4f9d3a', '#5fb043', '#3f8a34', '#74b94a'][i]), { at, anim: 'tumble', n: 5, from, turns: i % 2 ? -.6 : .6 }));
 // רימון ואתרוג קופצים לפינות התחתונות
 title([P(ell(300, 600, 34), '#c62839', { amp: 1.2 }), P([[286, 570], [292, 556], [298, 568], [304, 554], [310, 568], [316, 558], [316, 574], [286, 574]], '#9e1b2b', { detail: true, amp: .5, step: 8 }),
-       P(ell(290, 590, 9, 13, .5), '#ef6a78', { detail: true, amp: .4 })], { at: 3.1, anim: 'drop', dist: 260, spin: .6 });
+       P(ell(290, 590, 9, 13, .5), '#ef6a78', { detail: true, amp: .4 })], { at: 1.7, anim: 'drop', n: 3, dist: 260, spin: .6 });
 title([P(ell(985, 598, 26, 36, .5), '#f2d024', { amp: 1.8, step: 8 }), P(rect(1000, 560, 6, 14), '#5a8f2e', { detail: true, amp: .4 }),
-       P(ell(1012, 560, 16, 7, -.4), '#4caf50', { detail: true, amp: .6 })], { at: 3.3, anim: 'drop', dist: 260, spin: -.6 });
+       P(ell(1012, 560, 16, 7, -.4), '#4caf50', { detail: true, amp: .6 })], { at: 1.8, anim: 'drop', n: 3, dist: 260, spin: -.6 });
 // כוכבי נייר
 function star(cx, cy, r, col) {
   const pts = [];
   for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * .45 : r; pts.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]); }
   return [P(pts, col, { amp: .6, step: 8 })];
 }
-[[330, 140, 22, '#f2b134', 3.5], [955, 150, 18, '#fffaf0', 3.6], [230, 330, 14, '#fffaf0', 3.7], [1060, 320, 20, '#f2b134', 3.8], [640, 560, 16, '#fffaf0', 3.9]]
+[[330, 140, 22, '#f2b134', 1.9], [955, 150, 18, '#fffaf0', 2.0], [230, 330, 14, '#fffaf0', 2.1], [1060, 320, 20, '#f2b134', 2.2], [640, 560, 16, '#fffaf0', 2.3]]
   .forEach(([x, y, r, c, at]) => title(star(x, y, r, c), { at, anim: 'pop', rot0: rnd(-.4, .4) }));
 // סרט אדום שנפרש מימין לשמאל
 title([P([[250, 392], [345, 392], [345, 492], [250, 492], [282, 442]], '#a8322a'), P([[1030, 392], [935, 392], [935, 492], [1030, 492], [998, 442]], '#a8322a')],
-      { at: 2.3, anim: 'pop' });
+      { at: 1.45, anim: 'pop' });
 {
   const band = title([P(rect(330, 370, 620, 104), '#d9483b'), P([rect(330, 380, 620, 3), rect(330, 461, 620, 3)], '#f4a08f', { detail: true, amp: .5 })],
-                     { at: 1.8, anim: 'unrollX' });
+                     { at: 1.0, anim: 'unrollX', n: 4 });
   band.roll = sprite([P(rect(-12, -58, 24, 116), '#b83a2e', { amp: .8 }), P(rect(-5, -58, 4, 116), 'rgba(255,255,255,.35)', { detail: true, amp: .3 })]);
 }
 const rollUp = sprite([P(rect(-30, -28, W + 60, 56), '#b88c62', { amp: 1 }), P(rect(-30, -19, W + 60, 7), '#dcb68d', { detail: true, amp: .6 }),
@@ -633,12 +727,12 @@ function buildTexts() {
   // "שלומית": כל אות מתהפכת כמו כרטיס נייר (רואים את הגב הלבן)
   layoutLine('שלומית', 150, 6).forEach(({ ch, x }, i) => {
     const s = letterSprites(ch, x, 250, 150, PAPER[i % PAPER.length], '#fffaf0');
-    add({ group: 'title', spr: s.front, back: s.back, px: x, py: 250, at: 0.9 + i * 0.22, anim: 'flip', rot0: rnd(-.09, .09), depth: 1, jit: .9, bbw: { h: 0 } });
+    add({ group: 'title', spr: s.front, back: s.back, px: x, py: 250, at: 0.4 + i * 0.1, anim: 'flip', n: 3, rot0: rnd(-.09, .09), depth: 1, jit: .9, bbw: { h: 0 } });
   });
   // "בונה סוכה": אותיות מתגלגלות על הסרט האדום
   layoutLine('בונה סוכה', 84, 4).forEach(({ ch, x }, i) => {
     const s = letterSprites(ch, x, 420, 84, '#fff4dc', null);
-    add({ group: 'title', spr: s.front, px: x, py: 420, at: 2.5 + i * 0.16, anim: 'roll', from: [560, 0], radius: 42, rot0: rnd(-.07, .07), depth: .8, jit: .8, bbw: { h: 0 } });
+    add({ group: 'title', spr: s.front, px: x, py: 420, at: 1.3 + i * 0.07, anim: 'roll', n: 5, from: [560, 0], radius: 42, rot0: rnd(-.07, .07), depth: .8, jit: .8, bbw: { h: 0 } });
   });
   // שלט בשטח: "כאן תהיה סוכה!" — עולה מהאדמה ונופל כשמתחילים לבנות
   const sg = sprite([P(rect(513, 520, 14, 104), C.woodD, { amp: .8 }), P(rect(398, 462, 244, 76), C.woodL, { amp: 1.2 }),
@@ -650,7 +744,42 @@ function buildTexts() {
   const ribbon = [P([[40, 636], [372, 636], [352, 668], [372, 700], [40, 700], [60, 668]], '#fff4dc', { amp: 1 })];
   const rb = sprite(ribbon, { after: g => { g.font = font(36); g.textAlign = 'center'; g.textBaseline = 'middle'; g.direction = 'rtl';
                                             sh(g, 1.5, .8, 1, 'rgba(40,24,10,.3)'); g.fillStyle = '#b83a2e'; g.fillText('המשך יבוא...', 206, 670); } });
-  add({ spr: rb, px: 206, py: 668, at: 14.7, anim: 'slide', from: [-480, 0], rot0: -.03, jit: .8, bbw: { h: 0 } });
+  foreground();
+  add({ spr: rb, px: 206, py: 668, at: 15.0, anim: 'slide', from: [-480, 0], rot0: -.03, jit: .8, bbw: { h: 0 }, screen: true });
+}
+
+// עלים ועשבים גדולים בקדמת התמונה (זזים יותר מהבמה כשהמצלמה זזה)
+function foreground() {
+  const blade = (x, y, h, lean, w) => [[x - w, y], [x + lean * .6, y - h * .6], [x + lean, y - h], [x + lean * .5 + w * .3, y - h * .55], [x + w, y]];
+  const L = [], Rr = [];
+  for (let i = 0; i < 7; i++) L.push(blade(-30 + i * 24, 760, rnd(60, 115), rnd(-10, 30), rnd(8, 13)));
+  for (let i = 0; i < 7; i++) Rr.push(blade(1160 + i * 24, 760, rnd(60, 115), rnd(-30, 10), rnd(8, 13)));
+  piece([P(L, '#3d7a32', { amp: .8, step: 12 }), P(L.slice(0, 4).map(b => b.map(([x, y]) => [x + 10, y + 6])), '#4f9140', { amp: .8, step: 12 })],
+        { at: .2, anim: 'slide', from: [0, 160], k: 1.3, depth: 1.2 });
+  piece([P(Rr, '#3d7a32', { amp: .8, step: 12 }), P(Rr.slice(3).map(b => b.map(([x, y]) => [x - 10, y + 6])), '#4f9140', { amp: .8, step: 12 })],
+        { at: .4, anim: 'slide', from: [0, 160], k: 1.3, depth: 1.2 });
+}
+
+// ============================================================
+//  מצלמה: זום ומעקב, פריים-פריים (כמו הזזת מצלמה בין צילומים)
+// ============================================================
+// [זמן, זום, מרכז x ('S' = עוקב אחרי שלומית), מרכז y]
+const CAM = [[0, 1, 640, 360], [3.9, 1, 640, 360], [4.7, 1.6, 540, 470], [5.7, 1.6, 540, 470], [6.5, 1.85, 'S', 520],
+             [7.8, 1.85, 'S', 520], [8.4, 1.4, 690, 470], [12.3, 1.5, 680, 470], [13.1, 1, 640, 360], [999, 1, 640, 360]];
+function camAt(bt) {
+  let i = 0;
+  while (i < CAM.length - 2 && bt >= CAM[i + 1][0]) i++;
+  const a = CAM[i], b = CAM[i + 1], l = clamp((bt - a[0]) / (b[0] - a[0]), 0, 1), e = .5 - .5 * Math.cos(Math.PI * l);
+  const X = v => v === 'S' ? segX(shlomit.segs, bt).x : v;
+  const z = a[1] + (b[1] - a[1]) * e;
+  let x = X(a[2]) + (X(b[2]) - X(a[2])) * e, y = a[3] + (b[3] - a[3]) * e;
+  x = clamp(x, 640 / z, W - 640 / z); y = clamp(y, 360 / z, H - 360 / z);
+  return { z, x, y };
+}
+function applyCam(c, k) {
+  const zk = 1 + (c.z - 1) * k;
+  ctx.translate(640, 360); ctx.scale(zk, zk); ctx.translate(-(640 + (c.x - 640) * k), -(360 + (c.y - 360) * k));
+  shK = DPR * zk;
 }
 
 // ============================================================
@@ -668,7 +797,13 @@ function render(cf, bf) {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.fillStyle = '#2a1d12'; ctx.fillRect(0, 0, W, H);
   ctx.save(); ctx.translate(camX - 3, camY - 3); ctx.scale((W + 6) / W, (H + 6) / H);
-  for (const p of S) if (!p.group) drawPiece(p, cf, bf);
+  const cm = camAt(cf / FPS / SCALE);
+  for (const p of S) {
+    if (p.group) continue;
+    ctx.save(); if (!p.screen) applyCam(cm, p.k);
+    drawPiece(p, cf, bf);
+    ctx.restore(); shK = DPR;
+  }
   // כרטיס הפתיחה נגלל למעלה כמו מגילה
   const rk = cf - appearF(ROLL_AT);
   if (rk < ROLL_N) {
