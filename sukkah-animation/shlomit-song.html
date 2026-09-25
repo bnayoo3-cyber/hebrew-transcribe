@@ -36,6 +36,7 @@
   .file input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
   #msg { margin: 0; min-height: 1.3em; font-size: 14px; opacity: .85; text-align: center; max-width: 60ch; }
   #msg a { color: var(--fg); }
+  @font-face { font-family: Discovery; src: url(fonts/Discovery_Fs-Bold.otf) format('opentype'); font-display: block; }
 </style>
 </head>
 <body>
@@ -1459,52 +1460,147 @@ const vignette = (() => { const g = mainCtx.createRadialGradient(640, 360, 250, 
 const grainPat = mainCtx.createPattern(TEX, 'repeat');
 
 // ============================================================
-//  כתוביות: כל מילה על פיסת נייר משלה, נכנסת עם השירה ונופלת בסוף השורה
+//  כתוביות מגזרי נייר — 7 סגנונות שמתחלפים משורה לשורה, ותווי נגינה שעולים
 // ============================================================
-const SUBS = [];
+const SUBFONT = size => `${size}px Discovery, "Secular One", Rubik, "Arial Hebrew", sans-serif`;
+const SUBS = [], NOTES = [];
 const SUB_STYLE = [
-  { papers: ['#fff4dc', '#ffe08a', '#c9e8b8', '#ffd0c2'], ink: '#5a2e14' },
-  { papers: ['#fde2ec', '#e6dcf7', '#fff0a8', '#d5f0dc'], ink: '#4a2340' },
-  { papers: ['#ffd7a8', '#cfe9ff', '#ffe7a8', '#e8f5c8'], ink: '#3a2a1c' },
-  { papers: ['#2e4280', '#44307a', '#1f5063', '#4f2e66'], ink: '#fff4dc' },
+  { papers: ['#fff4dc', '#ffe08a', '#c9e8b8', '#ffd0c2'], ink: '#5a2e14', accent: '#d9483b' },
+  { papers: ['#fde2ec', '#e6dcf7', '#fff0a8', '#d5f0dc'], ink: '#4a2340', accent: '#8e55b8' },
+  { papers: ['#ffd7a8', '#cfe9ff', '#ffe7a8', '#e8f5c8'], ink: '#3a2a1c', accent: '#2f86d6' },
+  { papers: ['#2e4280', '#44307a', '#1f5063', '#4f2e66'], ink: '#fff4dc', accent: '#f2b134' },
 ];
+const STYLES = ['paper', 'letters', 'ribbon', 'clothesline', 'torn', 'bubbles', 'stickers'];
+const textSpr = (w, size, ink, bb) => sprite([], { bb, pad: 6, after: g => { g.font = SUBFONT(size); g.textAlign = 'center'; g.textBaseline = 'middle'; g.direction = 'rtl';
+  sh(g, 1.2, .6, .9, 'rgba(0,0,0,.25)'); g.fillStyle = ink; g.fillText(w, 0, 3); sh(g, 0, 0, 0, 'rgba(0,0,0,0)'); } });
+const cloudPoly = (w, h) => { const c = []; const n = Math.max(3, Math.round(w / 34));
+  for (let i = 0; i < n; i++) { const x = -w / 2 + (i + .5) * w / n; c.push(ell(x, -h * .18 + (i % 2 ? -6 : 4), w / n * .75, h * .42)); }
+  c.push(ell(0, h * .08, w * .56, h * .36)); return c; };
+const NOTE_SPR = (() => {
+  const one = col => sprite([P(ell(-6, 14, 11, 8, -.4), col, { amp: .5 }), P(rect(3, -26, 4.5, 40), col, { amp: .3 }), P([[3, -26], [18, -16], [16, -8], [7, -16]], col, { amp: .3, step: 6 })]);
+  const two = col => sprite([P([ell(-16, 16, 10, 7, -.4), ell(16, 12, 10, 7, -.4)], col, { amp: .5 }), P([rect(-8, -22, 4.5, 38), rect(24, -26, 4.5, 38), [[-8, -22], [28, -26], [28, -18], [-8, -14]]], col, { amp: .3, step: 8 })]);
+  return ['#e3343f', '#2f86d6', '#f2b134', '#4caf50', '#8e55b8', '#ef7a36'].flatMap(c => [one(c), two(c)]);
+})();
 function buildSubs() {
   if (!window.LYRICS) return;
-  const size = 62, gap = 14, Y = 642;
+  const gap = 14, Y = 642;
+  let g = 0;
   LYRICS.forEach((lines, s) => lines.forEach((line, li) => {
     const start = L(s + 1, li + 1), end = li < 5 ? L(s + 1, li + 2) : (s < 3 ? SONG.S[s + 1] : SONG.MUSIC_END - .4);
-    const words = line.split(' ').filter(Boolean), st = SUB_STYLE[s];
-    ctx = mainCtx; ctx.font = font(size);
-    const ws = words.map(w => ctx.measureText(w).width + 36);
-    const total = ws.reduce((a, b) => a + b, 0) + gap * (ws.length - 1), k = Math.min(1, 1180 / total);
+    const style = STYLES[g++ % STYLES.length], st = SUB_STYLE[s], words = line.split(' ').filter(w => w && !/^[-–:,.!]+$/.test(w));
+    const size = style === 'letters' ? 54 : 60;
+    ctx = mainCtx; ctx.font = SUBFONT(size);
+    const pad = style === 'letters' ? 0 : style === 'bubbles' ? 56 : 38;
+    const letterW = ch => Math.max(34, ctx.measureText(ch).width + 18);
+    const ws = words.map(w => style === 'letters' ? [...w].reduce((a, ch) => a + letterW(ch) + 4, 0) : ctx.measureText(w).width + pad);
+    const total = ws.reduce((a, b) => a + b, 0) + gap * (ws.length - 1), k = Math.min(1, 1160 / total);
     let xr = 640 + total * k / 2;
-    const span = (end - start) * .62;
-    const ww = words.map((w, i) => {
+    const span = (end - start) * .62, out = { start, end, style, k, total: total * k, x0: 640 - total * k / 2, x1: 640 + total * k / 2, st, words: [], y: Y };
+    words.forEach((w, i) => {
       const cx = xr - ws[i] * k / 2; xr -= (ws[i] + gap) * k;
-      const pw = ws[i], ph = 86, col = st.papers[(i + li) % st.papers.length], torn = (i + li + s) % 3 === 0;
-      const paths = [P(rect(-pw / 2, -ph / 2, pw, ph), col, { amp: 1.3, step: 14, ...(torn ? { torn: 2.6 } : {}) })];
-      if ((i + li) % 4 === 1) paths.push(P([[-16, -ph / 2 - 8], [18, -ph / 2 - 12], [20, -ph / 2 + 8], [-14, -ph / 2 + 12]], 'rgba(255,252,235,.6)', { detail: true, amp: .4, step: 10 }));
-      const spr = sprite(paths, { after: g => { g.font = font(size); g.textAlign = 'center'; g.textBaseline = 'middle'; g.direction = 'rtl';
-        sh(g, 1.2, .6, .9, 'rgba(0,0,0,.25)'); g.fillStyle = st.ink; g.fillText(w, 0, 3); sh(g, 0, 0, 0, 'rgba(0,0,0,0)'); } });
-      return { spr, x: cx, y: Y + (i % 2 ? -5 : 4), rot: rnd(-.09, .09), k, at: start + .12 + i * span / words.length, dir: i % 2 ? 1 : -1, seed: SUBS.length * 17 + i };
+      const at = start + .12 + i * span / words.length, col = st.papers[(i + li) % st.papers.length], seed = SUBS.length * 17 + i;
+      const pw = ws[i], ph = 86, o = { x: cx, y: Y + (i % 2 ? -5 : 4), rot: rnd(-.09, .09), at, dir: i % 2 ? 1 : -1, seed, w: pw * k };
+      if (style === 'paper') o.spr = sprite([P(rect(-pw / 2, -ph / 2, pw, ph), col, { amp: 1.3, step: 14, ...((i + li) % 3 === 0 ? { torn: 2.6 } : {}) }),
+        ...((i + li) % 4 === 1 ? [P([[-16, -ph / 2 - 8], [18, -ph / 2 - 12], [20, -ph / 2 + 8], [-14, -ph / 2 + 12]], 'rgba(255,252,235,.6)', { detail: true, amp: .4, step: 10 })] : [])],
+        { after: gg => { gg.font = SUBFONT(size); gg.textAlign = 'center'; gg.textBaseline = 'middle'; gg.direction = 'rtl'; gg.fillStyle = st.ink; gg.fillText(w, 0, 3); } });
+      else if (style === 'letters') {                               // קולאז': כל אות על ריבוע נייר משלה
+        o.letters = []; let lx = pw / 2;
+        [...w].forEach((ch, j) => { const lw = letterW(ch); lx -= lw / 2; const c2 = st.papers[(i + j + li) % st.papers.length];
+          o.letters.push({ dx: lx, dy: rnd(-7, 7), rot: rnd(-.18, .18), spr: sprite([P(rect(-lw / 2, -36, lw, 72), c2, { amp: 1.1, step: 12 })],
+            { after: gg => { gg.font = SUBFONT(size); gg.textAlign = 'center'; gg.textBaseline = 'middle'; gg.fillStyle = j % 3 === 1 ? st.accent : st.ink; gg.fillText(ch, 0, 3); } }) });
+          lx -= lw / 2 + 4; });
+      } else if (style === 'bubbles') o.spr = sprite([P(cloudPoly(pw, 96), s === 3 ? '#3d5294' : '#fffdf6', { amp: 1, step: 10 })],
+        { after: gg => { gg.font = SUBFONT(size); gg.textAlign = 'center'; gg.textBaseline = 'middle'; gg.direction = 'rtl'; gg.fillStyle = s === 3 ? '#fff4dc' : st.ink; gg.fillText(w, 0, 6); } });
+      else if (style === 'stickers') o.spr = sprite([P([[-pw / 2 - 8, -ph / 2 - 8], [pw / 2 + 8, -ph / 2 - 8], [pw / 2 + 8, ph / 2 + 8], [-pw / 2 - 8, ph / 2 + 8]], '#ffffff', { amp: .8, step: 12 }),
+        P(rect(-pw / 2, -ph / 2, pw, ph), [st.accent, '#2f86d6', '#4caf50', '#ef7a36', '#e3343f'][(i + li) % 5], { amp: .8, step: 12 })],
+        { after: gg => { gg.font = SUBFONT(size); gg.textAlign = 'center'; gg.textBaseline = 'middle'; gg.direction = 'rtl'; gg.fillStyle = '#ffffff'; gg.fillText(w, 0, 3); } });
+      else if (style === 'clothesline') {
+        o.spr = sprite([P(rect(-pw / 2, 0, pw, ph), col, { amp: 1.2, step: 14 })],
+          { after: gg => { gg.font = SUBFONT(size); gg.textAlign = 'center'; gg.textBaseline = 'middle'; gg.direction = 'rtl'; gg.fillStyle = st.ink; gg.fillText(w, 0, ph / 2 + 3); } });
+        o.pin = sprite([P(rect(-5, -14, 10, 30), '#c98a52', { amp: .4, step: 8 }), P(rect(-5, -2, 10, 3), '#8a5530', { detail: true, amp: .2 })]);
+      } else o.spr = textSpr(w, size, style === 'ribbon' ? '#fff4dc' : style === 'torn' ? '#23408e' : st.ink, { x: -pw / 2, y: -44, w: pw, h: 88 });
+      out.words.push(o);
     });
-    SUBS.push({ start, end, words: ww });
+    if (style === 'ribbon') {
+      const w2 = out.total + 70;
+      out.band = sprite([P([[-w2 / 2, -46], [w2 / 2, -46], [w2 / 2 - 16, 0], [w2 / 2, 46], [-w2 / 2, 46], [-w2 / 2 + 16, 0]], st.accent, { amp: .9, step: 14 }),
+        P([rect(-w2 / 2 + 14, -38, w2 - 28, 2.5), rect(-w2 / 2 + 14, 35, w2 - 28, 2.5)], 'rgba(255,255,255,.45)', { detail: true, amp: .3 })]);
+      out.roll = sprite([P(rect(-11, -50, 22, 100), st.accent, { amp: .6 }), P(rect(-4, -50, 4, 100), 'rgba(0,0,0,.18)', { detail: true, amp: .3 })]);
+    }
+    if (style === 'torn') {
+      const w2 = out.total + 90, tp = [];
+      for (let x = -w2 / 2; x <= w2 / 2; x += 18) tp.push([x, -52 + rnd(-5, 5)]);
+      out.band = sprite([P([...tp, [w2 / 2, 50], [-w2 / 2, 50]], '#fdfbf2', { amp: 1, step: 16, torn: 3 }),
+        P([-22, 0, 22].map(y => rect(-w2 / 2 + 6, y + 8, w2 - 12, 1.6)), '#a9c4e8', { detail: true, amp: .3, step: 30 }),
+        P(rect(w2 / 2 - 50, -46, 2.5, 94), '#e38a8a', { detail: true, amp: .3 })]);
+    }
+    SUBS.push(out);
+    // תווי נגינה: כמה בתחילת השורה, ועוד אחד פה ושם על הפעימות
+    const r = mulberry32(SUBS.length * 991);
+    const spawn = t => NOTES.push({ t, x: out.x0 + r() * out.total, spr: NOTE_SPR[Math.floor(r() * NOTE_SPR.length)], sway: r() * 6, dir: r() < .5 ? -1 : 1, s: 1.15 + r() * .55 });
+    if (g % 2 === 1) for (let n = 0; n < 3; n++) spawn(start + .1 + n * SONG.BEAT);
+    for (let b = start + 2 * SONG.BEAT; b < end - 1; b += 4 * SONG.BEAT) if (r() < .45) spawn(b);
   }));
+}
+function wordAnim(line, w, f) {
+  const kin = f - appearF(w.at), kout = f - appearF(line.end - .3), jr = mulberry32(f * 97 + w.seed);
+  if (kin < 0 || kout >= 6) return null;
+  const a = { sc: kin < 3 ? [.5, 1.15, .95][kin] : 1, dx: (jr() - .5) * 2, dy: (kin < 3 ? [-34, -8, 2][kin] : 0) + (jr() - .5) * 2, rot: w.rot + (jr() - .5) * .02, kin, kout };
+  if (kout >= 0) { a.dy += (kout + 1) * (kout + 1) * 16; a.rot += (kout + 1) * .28 * w.dir; a.dx += (kout + 1) * 10 * w.dir; }
+  return a;
 }
 function drawSubs(f) {
   const T = f / FPS;
   for (const line of SUBS) {
-    if (T < line.start || T > line.end + 1) continue;
-    const kout = f - appearF(line.end - .3);
-    for (const w of line.words) {
-      const kin = f - appearF(w.at); if (kin < 0) continue;
+    if (T < line.start - .2 || T > line.end + 1) continue;
+    const kout = f - appearF(line.end - .3), k = line.k;
+    if (line.style === 'ribbon' || line.style === 'torn') {            // רקע משותף לשורה
       if (kout >= 6) continue;
-      const jr = mulberry32(f * 97 + w.seed);
-      let sc = kin < 3 ? [.5, 1.15, .95][kin] : 1, dy = kin < 3 ? [-34, -8, 2][kin] : 0, rot = w.rot, dx = 0;
-      if (kout >= 0) { dy += (kout + 1) * (kout + 1) * 16; rot += (kout + 1) * .28 * w.dir; dx = (kout + 1) * 10 * w.dir; }
-      ctx.save(); ctx.translate(w.x + dx + (jr() - .5) * 2, w.y + dy + (jr() - .5) * 2); ctx.rotate(rot + (jr() - .5) * .02); ctx.scale(sc * w.k, sc * w.k);
-      place(w.spr, 0, 0, 0, .9); ctx.restore();
+      const lastAt = line.words[line.words.length - 1].at, prog = clamp((T - line.start) / Math.max(.4, lastAt + .4 - line.start), 0, 1);
+      const drop = kout >= 0 ? (kout + 1) * (kout + 1) * 18 : 0, jr = mulberry32(f * 13 + line.start * 10 | 0);
+      ctx.save(); ctx.translate(640 + (jr() - .5) * 2, line.y + drop);
+      ctx.rotate(line.style === 'torn' ? -.025 : .01);
+      if (line.style === 'ribbon') {
+        const w2 = line.total + 70, edge = w2 / 2 - w2 * prog;
+        ctx.save(); ctx.beginPath(); ctx.rect(edge, -80, w2, 160); ctx.clip(); place(line.band, 0, 0, 0, .9); ctx.restore();
+        if (prog < 1) place(line.roll, edge, 0, 0, .9);
+      } else { const sc = f - appearF(line.start) < 3 ? [.2, .7, 1.03][f - appearF(line.start)] : 1; ctx.scale(1, Math.max(.05, sc)); place(line.band, 0, 0, 0, .9); }
+      ctx.restore();
     }
+    if (line.style === 'clothesline') {                                  // חבל כביסה
+      const x0 = line.x0 - 50, x1 = line.x1 + 50, yy = line.y - 60, sag = 16, show = clamp((f - appearF(line.start - .1)) / 3, 0, 1);
+      if (kout < 6 && show > 0) { ctx.save(); ctx.strokeStyle = '#6b4a2b'; ctx.lineWidth = 2.2; ctx.beginPath();
+        for (let i = 0; i <= 20; i++) { const u = i / 20, x = x1 - (x1 - x0) * u * show; const y = yy + sag * Math.sin(Math.PI * u) + (kout >= 0 ? (kout + 1) * (kout + 1) * 14 : 0); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+        ctx.stroke(); ctx.restore(); }
+    }
+    for (const w of line.words) {
+      const a = wordAnim(line, w, f); if (!a) continue;
+      ctx.save();
+      if (line.style === 'letters') {
+        ctx.translate(w.x + a.dx, w.y + a.dy); ctx.scale(k, k);
+        w.letters.forEach((l, j) => { const kk = a.kin - j; if (kk < 0) return; const s2 = kk < 2 ? [.4, 1.15][kk] : 1;
+          ctx.save(); ctx.translate(l.dx, l.dy); ctx.rotate(l.rot + (a.kout >= 0 ? a.rot : 0)); ctx.scale(s2, s2); place(l.spr, 0, 0, 0, .8); ctx.restore(); });
+      } else if (line.style === 'clothesline') {
+        const u = (w.x - (line.x0 - 50)) / (line.total + 100), py = line.y - 60 + 16 * Math.sin(Math.PI * (1 - u)) + (a.kout >= 0 ? (a.kout + 1) * (a.kout + 1) * 14 : 0);
+        const sw = a.kin < 3 ? [-40, -10, 0][a.kin] : 0, swing = .22 * Math.exp(-a.kin / 6) * Math.sin(a.kin * 1.1);
+        ctx.translate(w.x, py + sw); ctx.rotate(swing + w.rot * .4); ctx.scale(k, k); place(w.spr, 0, 0, 0, .9); place(w.pin, 0, 0, 0, .6);
+      } else if (line.style === 'bubbles') {
+        const fl = -Math.sin(T * 2.2 + w.seed) * 6 - clamp((T - w.at) * 4, 0, 12);
+        ctx.translate(w.x + a.dx, w.y + a.dy + fl); ctx.rotate(a.rot * .5); ctx.scale(a.sc * k, a.sc * k); place(w.spr, 0, 0, 0, .8);
+      } else if (line.style === 'stickers') {
+        const sl = a.kin < 3 ? [1.7, .82, 1.06][a.kin] : 1;
+        ctx.translate(w.x + a.dx, w.y + (a.kout >= 0 ? a.dy : 0)); ctx.rotate(a.rot * 1.4); ctx.scale(sl * k, sl * k * (a.kin === 1 ? .9 : 1)); place(w.spr, 0, 0, 0, a.kin === 0 ? 1.6 : .8);
+      } else if (line.style === 'ribbon' || line.style === 'torn') {
+        const drop = a.kout >= 0 ? (a.kout + 1) * (a.kout + 1) * 18 : 0;
+        ctx.translate(w.x + a.dx * .3, line.y + drop); ctx.rotate(line.style === 'torn' ? -.025 : .01); ctx.scale(a.sc * k, a.sc * k); place(w.spr, 0, 0, 0, 0);
+      } else { ctx.translate(w.x + a.dx, w.y + a.dy); ctx.rotate(a.rot); ctx.scale(a.sc * k, a.sc * k); place(w.spr, 0, 0, 0, .9); }
+      ctx.restore();
+    }
+  }
+  for (const n of NOTES) {                                              // תווי נגינה מנייר שעולים ומתנדנדים
+    const u = (T - n.t) / 2.4; if (u < 0 || u > 1) continue;
+    const x = n.x + Math.sin(u * 6 + n.sway) * 16 * n.dir, y = 600 - u * 230, a = u < .8 ? 1 : (1 - u) * 5;
+    ctx.save(); ctx.globalAlpha = a; ctx.translate(x, y); ctx.rotate(Math.sin(u * 7 + n.sway) * .3); ctx.scale(n.s * (u < .06 ? .5 : 1), n.s); place(n.spr, 0, 0, 0, .7); ctx.restore();
   }
 }
 
@@ -1541,7 +1637,7 @@ document.getElementById('song').onchange = async e => {
   msg.textContent = 'השיר נטען. האנימציה מסונכרנת לשיר.';
 };
 
-Promise.race([Promise.all([document.fonts.load('84px "Secular One"'), document.fonts.load('28px Rubik')]).catch(() => {}), new Promise(r => setTimeout(r, 2000))]).then(() => {
+Promise.race([Promise.all([document.fonts.load('84px "Secular One"'), document.fonts.load('28px Rubik'), document.fonts.load('60px Discovery')]).catch(() => {}), new Promise(r => setTimeout(r, 2000))]).then(() => {
   buildAll(); SHOTS = SHOTS_DEF(); buildSubs();
   window.renderFrame = f => { render(f); return cv.toDataURL('image/jpeg', .92); };
   const fz = new URLSearchParams(location.search).get('frame');
