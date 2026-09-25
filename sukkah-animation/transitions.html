@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>מעברי נייר</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Secular+One&family=Rubik:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; --bg: #241a12; --fg: #f4ead3; --btn: #f4ead3; --btn-fg: #241a12; --accent: #e8612f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: Rubik, "Arial Hebrew", sans-serif; }
+  .page {
+    min-height: 100vh; padding: 16px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    background: radial-gradient(ellipse at center, #3a2a1c 0%, var(--bg) 70%);
+  }
+  .stage {
+    width: min(100%, calc((100vh - 190px) * 16 / 9)); max-width: 100%;
+    aspect-ratio: 16 / 9; border-radius: 4px; overflow: hidden;
+    box-shadow: 0 18px 40px rgba(0,0,0,.55), 0 0 0 8px #4a3726, 0 0 0 10px #1c140d;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: 980px; }
+  .btn {
+    font: 700 14px Rubik, sans-serif; padding: 9px 14px; border: none; border-radius: 999px;
+    background: var(--btn); color: var(--btn-fg); cursor: pointer; box-shadow: 2px 3px 0 rgba(0,0,0,.4);
+  }
+  .btn[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .btn:active { transform: translate(1px, 2px); box-shadow: 1px 1px 0 rgba(0,0,0,.4); }
+</style>
+</head>
+<body>
+<div class="page">
+<div class="stage"><canvas id="c" aria-label="הדגמת מעברים בין סצנות בסגנון נייר"></canvas></div>
+<div class="controls" id="controls"></div>
+</div>
+
+<script>
+// ============================================================
+//  מעברי נייר בין סצנות — 7 אפשרויות להשוואה
+//  כל מעבר מקבל את הסצנה היוצאת (A) והנכנסת (B) ומרכיב ביניהן.
+// ============================================================
+const W = 1280, H = 720, FPS = 12;
+const HOLD = 10, TRANS = 16, PER = HOLD + TRANS + HOLD;      // פריימים: החזקה, מעבר, החזקה
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+cv.width = W * DPR; cv.height = H * DPR;
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const R = mulberry32(911), rnd = (a, b) => a + R() * (b - a);
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const ease = x => .5 - .5 * Math.cos(Math.PI * clamp(x, 0, 1));
+const easeIn = x => x * x * x;
+const easeOutBack = (x, s = 1.7) => 1 + (s + 1) * Math.pow(x - 1, 3) + s * Math.pow(x - 1, 2);
+function sh(b, x, y, a) { ctx.shadowBlur = b * DPR; ctx.shadowOffsetX = x * DPR; ctx.shadowOffsetY = y * DPR; ctx.shadowColor = `rgba(30,16,4,${a})`; }
+const nosh = () => sh(0, 0, 0, 0);
+
+// ---------- מרקם נייר לגרעין ----------
+const TEX = (() => {
+  const S = 256, c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d'), r = mulberry32(77);
+  for (let i = 0; i < 170; i++) {
+    const x = r() * S, y = r() * S, a = r() * Math.PI, l = 4 + r() * 14;
+    g.strokeStyle = r() < .55 ? `rgba(255,255,255,${(.2 + r() * .25).toFixed(2)})` : `rgba(50,30,10,${(.06 + r() * .08).toFixed(2)})`;
+    g.lineWidth = .5 + r() * .7; g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke();
+  }
+  const img = g.getImageData(0, 0, S, S), d = img.data;
+  for (let i = 0; i < d.length; i += 4) { const an = r() * 20 / 255, a0 = d[i + 3] / 255, a = an + a0 * (1 - an);
+    if (a > 0) for (let j = 0; j < 3; j++) d[i + j] = d[i + j] * a0 * (1 - an) / a; d[i + 3] = a * 255; }
+  g.putImageData(img, 0, 0); return ctx.createPattern(c, 'repeat');
+})();
+const vignette = (() => { const g = ctx.createRadialGradient(640, 360, 250, 640, 360, 780);
+  g.addColorStop(0, 'rgba(60,30,0,0)'); g.addColorStop(1, 'rgba(50,25,0,0.42)'); return g; })();
+
+// ---------- הסצנות ----------
+const SCENES = ['scenes/title.jpg', 'scenes/sign.jpg', 'scenes/build.jpg'].map(src => { const i = new Image(); i.src = src; return i; });
+let IW = 1920, IH = 1080;
+// ציור חלק מסצנה: מקור בקואורדינטות 1280x720
+function part(img, sx, sy, sw, sh_, dx, dy, dw, dh) {
+  const k = IW / W;
+  ctx.drawImage(img, sx * k, sy * k, sw * k, sh_ * k, dx, dy, dw, dh);
+}
+function full(img, bf, seed = 0) {                                   // סצנה מלאה עם "רעד" קל
+  const r = mulberry32(bf * 131 + seed);
+  ctx.save(); ctx.translate(640 + (r() - .5) * 2, 360 + (r() - .5) * 2); ctx.scale(1.006, 1.006);
+  ctx.drawImage(img, -640, -360, W, H); ctx.restore();
+}
+const table = () => { ctx.fillStyle = '#3a2a1c'; ctx.fillRect(0, 0, W, H); };
+
+// ============================================================
+//  המעברים
+// ============================================================
+// 1. דף מתהפך כמו בספר
+function pageTurn(A, B, l, bf) {
+  full(B, bf, 2);
+  const lift = 1 + .06 * Math.sin(Math.PI * l), ph = H * lift, py = (H - ph) / 2;
+  part(A, 0, 0, 640, H, 0, 0, 640, H);                              // החצי השמאלי של A נשאר
+  if (l < .5) {
+    const w = 640 * Math.cos(Math.PI * l);
+    ctx.save(); sh(24, 10, 10, .5); part(A, 640, 0, 640, H, 640, py, w, ph); ctx.restore();
+    ctx.fillStyle = `rgba(20,10,0,${(.5 * (1 - w / 640)).toFixed(3)})`; ctx.fillRect(640, py, w, ph);
+  } else {
+    const w = 640 * -Math.cos(Math.PI * l);
+    ctx.save(); sh(24, -10, 10, .5); part(B, 0, 0, 640, H, 640 - w, py, w, ph); ctx.restore();
+    ctx.fillStyle = `rgba(20,10,0,${(.5 * (1 - w / 640)).toFixed(3)})`; ctx.fillRect(640 - w, py, w, ph);
+  }
+  const g = ctx.createLinearGradient(610, 0, 670, 0);                // קו הקיפול
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(.5, 'rgba(0,0,0,.22)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.fillRect(610, 0, 60, H);
+}
+
+// 2. קימוט לכדור נייר שמתגלגל החוצה
+const MESH = (() => {
+  const NX = 14, NY = 8, C = [640, 380], RB = 120, v = [], t = [];
+  for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
+    const x = i * W / NX, y = j * H / NY, d = Math.hypot(x - C[0], y - C[1]), a = Math.atan2(y - C[1], x - C[0]) + rnd(-.6, .6);
+    const rr = RB * Math.min(1, .35 + .75 * d / 700) * rnd(.7, 1.05);
+    v.push({ x, y, tx: C[0] + Math.cos(a) * rr, ty: C[1] + Math.sin(a) * rr, nx: rnd(-1, 1), ny: rnd(-1, 1) });
+  }
+  const id = (i, j) => j * (NX + 1) + i;
+  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+    t.push({ v: [id(i, j), id(i + 1, j), id(i + 1, j + 1)], s: rnd(-.35, .4), z: R() });
+    t.push({ v: [id(i, j), id(i + 1, j + 1), id(i, j + 1)], s: rnd(-.35, .4), z: R() });
+  }
+  t.sort((a, b) => a.z - b.z);
+  return { v, t, C, RB };
+})();
+function triImg(img, s, d) {                                       // מיפוי משולש מהתמונה למשולש יעד
+  const k = IW / W, [[x0, y0], [x1, y1], [x2, y2]] = s.map(([x, y]) => [x * k, y * k]), [[u0, v0], [u1, v1], [u2, v2]] = d;
+  const cx = (u0 + u1 + u2) / 3, cy = (v0 + v1 + v2) / 3, ex = p => [p[0] + (p[0] - cx) * .04 + Math.sign(p[0] - cx) * .6, p[1] + (p[1] - cy) * .04 + Math.sign(p[1] - cy) * .6];
+  ctx.save(); ctx.beginPath(); d.map(ex).forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.clip();
+  const den = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+  const a = ((u1 - u0) * (y2 - y0) - (u2 - u0) * (y1 - y0)) / den, b = ((u2 - u0) * (x1 - x0) - (u1 - u0) * (x2 - x0)) / den;
+  const c = ((v1 - v0) * (y2 - y0) - (v2 - v0) * (y1 - y0)) / den, e = ((v2 - v0) * (x1 - x0) - (v1 - v0) * (x2 - x0)) / den;
+  ctx.transform(a, c, b, e, u0 - a * x0 - b * y0, v0 - c * x0 - e * y0);
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
+}
+function crumple(A, B, l, bf) {
+  full(B, bf, 2);
+  const c = ease(l / .62), m = clamp((l - .62) / .38, 0, 1), { v, t, C, RB } = MESH;
+  const ox = -Math.pow(m, 1.4) * 1100, oy = -Math.abs(Math.sin(m * Math.PI * 2)) * 50 * (1 - m), rot = ox / RB;
+  const cr = Math.sin(c * Math.PI) * 22, cs = Math.cos(rot), sn = Math.sin(rot);
+  const P = v.map(p => {
+    let x = p.x + (p.tx - p.x) * c + p.nx * cr, y = p.y + (p.ty - p.y) * c + p.ny * cr;
+    const dx = x - C[0], dy = y - C[1];
+    return [C[0] + dx * cs - dy * sn + ox, C[1] + dx * sn + dy * cs + oy];
+  });
+  if (c > .3) { ctx.fillStyle = `rgba(20,10,0,${(.3 * c).toFixed(2)})`; ctx.beginPath();
+    ctx.ellipse(C[0] + ox + 20, C[1] + RB + 12, RB * (.9 + (1 - c) * 3), 16, 0, 0, 7); ctx.fill(); }
+  for (const tr of t) {
+    const d = tr.v.map(i => P[i]);
+    triImg(A, tr.v.map(i => [v[i].x, v[i].y]), d);
+    const a = Math.abs(tr.s) * c;
+    if (a > .01) { ctx.fillStyle = tr.s > 0 ? `rgba(30,15,0,${a.toFixed(3)})` : `rgba(255,250,235,${(a * .8).toFixed(3)})`;
+      ctx.beginPath(); d.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.fill(); }
+  }
+}
+
+// 3. קריעה: הדף נקרע לשניים והחצאים עפים לצדדים
+const TEAR = (() => { const pts = []; let x = 640; for (let y = -30; y <= 750; y += 16) { x += rnd(-13, 13); x = clamp(x, 590, 690); pts.push([x, y]); } return pts; })();
+function tearHalf(A, left, e, bf) {
+  const poly = left ? [[-40, -40], ...TEAR, [-40, 760]] : [[1320, -40], ...TEAR, [1320, 760]];
+  const dir = left ? -1 : 1, pvx = left ? 0 : W;
+  ctx.save();
+  ctx.translate(pvx, H); ctx.rotate(dir * e * .16); ctx.translate(-pvx, -H);
+  ctx.translate(dir * (e * 860 + 3), e * (left ? 70 : 40));
+  ctx.beginPath(); poly.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath();
+  ctx.save(); sh(22, dir * 8, 12, .5); ctx.fillStyle = '#fbf5e6'; ctx.fill(); ctx.restore();   // ליבת הנייר הלבנה בקרע
+  ctx.save(); ctx.clip();
+  ctx.beginPath(); TEAR.forEach(([x, y], i) => ctx.lineTo(x - dir * 4, y)); ctx.lineTo(left ? -40 : 1320, 760); ctx.lineTo(left ? -40 : 1320, -40); ctx.closePath(); ctx.clip();
+  full(A, bf, left ? 3 : 4); ctx.restore();
+  ctx.restore();
+}
+function tear(A, B, l, bf) {
+  full(B, bf, 2);
+  const e = l < .3 ? .004 * (l / .3) : easeIn((l - .3) / .7);
+  tearHalf(A, true, e, bf); tearHalf(A, false, e, bf);
+}
+
+// 4. גלילה למעלה כמו מגילה
+function rollUp(A, B, l, bf) {
+  full(B, bf, 2);
+  const y = H + 30 - (H + 110) * ease(l);
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, Math.max(0, y)); ctx.clip(); full(A, bf, 1); ctx.restore();
+  ctx.save(); sh(20, 0, 14, .55);
+  ctx.fillStyle = '#b88c62'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(-30, y - 28, W + 60, 56, 28) : ctx.rect(-30, y - 28, W + 60, 56); ctx.fill(); nosh();
+  ctx.fillStyle = '#dcb68d'; ctx.fillRect(-30, y - 18, W + 60, 7); ctx.fillStyle = '#8a6340'; ctx.fillRect(-30, y + 13, W + 60, 8);
+  ctx.restore();
+}
+
+// 5. רצועות שמתהפכות אחת-אחת (מימין לשמאל)
+function strips(A, B, l, bf) {
+  table();
+  const N = 8, sw = W / N;
+  for (let i = 0; i < N; i++) {
+    const idx = N - 1 - i, f = clamp((l - i * .075) / .45, 0, 1), sx = Math.cos(Math.PI * f), img = f < .5 ? A : B;
+    const w = sw * Math.abs(sx), x = idx * sw + (sw - w) / 2, r = mulberry32(bf * 7 + i);
+    ctx.save(); sh(12, 4, 6, .45);
+    part(img, idx * sw, 0, sw, H, x + (r() - .5) * 1.5, (r() - .5) * 1.5, w + .5, H); ctx.restore();
+    if (Math.abs(sx) < 1) { ctx.fillStyle = `rgba(20,10,0,${(.55 * (1 - Math.abs(sx))).toFixed(3)})`; ctx.fillRect(x, 0, w, H); }
+  }
+}
+
+// 6. קיפול אקורדיון: הדף מתקפל למניפה ויוצא
+function accordion(A, B, l, bf) {
+  full(B, bf, 2);
+  const e = ease(l / .72), m = clamp((l - .72) / .28, 0, 1), N = 12, TW = W * (1 - e * .9), pw = TW / N, sw = W / N;
+  const x0 = W - TW + m * (TW + 120);                                // מתקפל ימינה ויוצא ימינה
+  for (let i = 0; i < N; i++) {
+    const ph = H * (1 - .05 * e * (i % 2)), py = (H - ph) / 2, x = x0 + i * pw;
+    ctx.save(); if (i === 0) sh(22, -8, 10, .5);
+    part(A, i * sw, 0, sw, H, x, py, pw + .6, ph); ctx.restore();
+    ctx.fillStyle = i % 2 ? `rgba(20,10,0,${(.42 * e).toFixed(3)})` : `rgba(255,250,235,${(.1 * e).toFixed(3)})`;
+    ctx.fillRect(x, py, pw + .6, ph);
+  }
+}
+
+// 7. דף חדש נוחת מעל הישן
+function newSheet(A, B, l, bf) {
+  full(A, bf, 1);
+  ctx.fillStyle = `rgba(20,10,0,${(.25 * l).toFixed(3)})`; ctx.fillRect(0, 0, W, H);
+  const e = easeOutBack(l, 1.25);
+  ctx.save(); sh(40, 0, 24, .55 * (1 - l * .6));
+  ctx.translate(640 + (1 - e) * 1150, 360 - (1 - e) * 260); ctx.rotate((1 - e) * .32); ctx.scale(1.006, 1.006);
+  ctx.drawImage(B, -640, -360, W, H); ctx.restore();
+}
+
+const TRANSITIONS = [
+  ['דף מתהפך', pageTurn], ['קימוט לכדור', crumple], ['קריעה', tear], ['גלילה למעלה', rollUp],
+  ['רצועות מתהפכות', strips], ['קיפול אקורדיון', accordion], ['דף חדש נוחת', newSheet],
+];
+
+// ---------- תווית נייר עם שם המעבר ----------
+function label(i) {
+  const txt = `${i + 1}. ${TRANSITIONS[i][0]}`;
+  ctx.save(); ctx.font = '38px "Secular One", Rubik, sans-serif'; ctx.direction = 'rtl'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  const w = ctx.measureText(txt).width + 48;
+  ctx.translate(W - 34, 62); ctx.rotate(-.02);
+  sh(10, 3, 5, .45); ctx.fillStyle = '#fff4dc';
+  ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(-w, -30); ctx.lineTo(-w + 14, 0); ctx.lineTo(-w, 30); ctx.lineTo(0, 30); ctx.closePath(); ctx.fill();
+  nosh(); ctx.fillStyle = '#b83a2e'; ctx.fillText(txt, -24, 2);
+  ctx.restore();
+}
+
+// ---------- ניגון ----------
+let mode = -1;                          // -1 = כל המעברים ברצף
+function render(f, bf) {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const n = mode < 0 ? TRANSITIONS.length : 1, total = n * PER, g = ((f % total) + total) % total;
+  const slot = Math.floor(g / PER), k = g % PER, ti = mode < 0 ? slot : mode;
+  const A = SCENES[ti % 3], B = SCENES[(ti + 1) % 3];
+  table();
+  if (k < HOLD) full(A, bf, 1);
+  else if (k < HOLD + TRANS) TRANSITIONS[ti][1](A, B, (k - HOLD + 1) / TRANS, bf);
+  else full(B, bf, 2);
+  label(ti);
+  const r = mulberry32(bf * 31 + 7);
+  ctx.save(); ctx.globalAlpha = .4; ctx.translate(-Math.floor(r() * 256), -Math.floor(r() * 256));
+  ctx.fillStyle = TEX; ctx.fillRect(0, 0, W + 256, H + 256); ctx.restore();
+  ctx.fillStyle = vignette; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = `rgba(30,15,0,${(r() * .05).toFixed(3)})`; ctx.fillRect(0, 0, W, H);
+}
+let t0 = performance.now(), last = -1;
+function tick() {
+  const f = Math.floor((performance.now() - t0) / 1000 * FPS);
+  if (f !== last) { last = f; render(f, f); }
+  requestAnimationFrame(tick);
+}
+// כפתורים
+const box = document.getElementById('controls'), buttons = [];
+[['כל המעברים ברצף', -1], ...TRANSITIONS.map((t, i) => [`${i + 1}. ${t[0]}`, i])].forEach(([txt, i]) => {
+  const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = txt;
+  b.setAttribute('aria-pressed', i === mode ? 'true' : 'false');
+  b.onclick = () => { mode = i; t0 = performance.now(); last = -1; buttons.forEach(([bb, j]) => bb.setAttribute('aria-pressed', j === i ? 'true' : 'false')); };
+  box.appendChild(b); buttons.push([b, i]);
+});
+
+Promise.all([
+  ...SCENES.map(i => i.complete ? Promise.resolve() : new Promise(r => { i.onload = r; i.onerror = r; })),
+  Promise.race([document.fonts.load('38px "Secular One"').catch(() => {}), new Promise(r => setTimeout(r, 1500))]),
+]).then(() => {
+  IW = SCENES[0].naturalWidth || 1920; IH = SCENES[0].naturalHeight || 1080;
+  const fz = new URLSearchParams(location.search).get('frame');
+  if (fz !== null) { render(+fz, +fz); window.__ready = true; return; }
+  requestAnimationFrame(tick);
+});
+</script>
+</body>
+</html>
