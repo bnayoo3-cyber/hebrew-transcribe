@@ -1,0 +1,1304 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>שלומית בונה סוכה</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Secular+One&family=Rubik:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; --bg: #241a12; --fg: #f4ead3; --btn: #f4ead3; --btn-fg: #241a12; --accent: #e8612f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: Rubik, "Arial Hebrew", sans-serif; }
+  .page {
+    min-height: 100vh; padding: 16px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    background: radial-gradient(ellipse at center, #3a2a1c 0%, var(--bg) 70%);
+  }
+  .stage {
+    width: min(100%, calc((100vh - 160px) * 16 / 9)); max-width: 100%;
+    aspect-ratio: 16 / 9; border-radius: 4px; overflow: hidden;
+    box-shadow: 0 18px 40px rgba(0,0,0,.55), 0 0 0 8px #4a3726, 0 0 0 10px #1c140d;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .btn {
+    font: 700 15px Rubik, sans-serif; padding: 10px 16px; border: none; border-radius: 999px;
+    background: var(--btn); color: var(--btn-fg); cursor: pointer;
+    box-shadow: 2px 3px 0 rgba(0,0,0,.4); display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn.accent { background: var(--accent); color: #fff; }
+  .btn:focus-visible, .file:focus-within .btn { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .btn:active { transform: translate(1px, 2px); box-shadow: 1px 1px 0 rgba(0,0,0,.4); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .file { position: relative; }
+  .file input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+  #msg { margin: 0; min-height: 1.3em; font-size: 14px; opacity: .85; text-align: center; max-width: 60ch; }
+  #msg a { color: var(--fg); }
+</style>
+</head>
+<body>
+<div class="page">
+<div class="stage"><canvas id="c" aria-label="אנימציית סטופ-מושן מגזרי נייר: שלומית בונה סוכה"></canvas></div>
+<div class="controls">
+  <button class="btn" id="restart" type="button">↺ מההתחלה</button>
+  <button class="btn" id="play" type="button">▶ נגן</button>
+  <span class="file"><span class="btn accent">♪ בחירת קובץ השיר</span><input type="file" id="song" accept="audio/*" aria-label="בחירת קובץ השיר"></span>
+</div>
+<p id="msg" aria-live="polite">כל השיר (3:18). בחרו את קובץ השיר מהמכשיר כדי שהאנימציה תתנגן איתו בסנכרון, או לחצו "נגן" לצפייה בלי קול.</p>
+</div>
+
+<script>
+// ============================================================
+//  שלומית בונה סוכה — כל השיר, סטופ-מושן מגזרי נייר
+//  מילים ולחן: נעמי שמר. התזמון נבנה לפי ניתוח של הקלטת השיר.
+// ============================================================
+const W = 1280, H = 720, FPS = 8;
+const cv = document.getElementById('c');
+const mainCtx = cv.getContext('2d');
+let ctx = mainCtx;
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+cv.width = W * DPR; cv.height = H * DPR;
+
+// ---------- כלים ----------
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const R = mulberry32(1405);
+const rnd = (a, b) => a + R() * (b - a);
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+
+// גזירה במספריים: קטעים ישרים באורך step עם סטייה קטנה
+function rough(pts, amp = 1.4, step = 16) {
+  const out = [];
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+    const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+    const n = Math.max(1, Math.round(len / step)), nx = -dy / len, ny = dx / len;
+    for (let k = 0; k < n; k++) {
+      const f = k / n, o = k === 0 ? rnd(-amp, amp) * 0.5 : rnd(-amp, amp);
+      out.push([x1 + dx * f + nx * o, y1 + dy * f + ny * o]);
+    }
+  }
+  return out;
+}
+const rect = (x, y, w, h) => [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+function ell(cx, cy, rx, ry = rx, rot = 0, n) {
+  n = n || Math.max(10, Math.round((rx + ry) * 0.45));
+  const c = Math.cos(rot), s = Math.sin(rot), pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = i / n * Math.PI * 2 + rnd(-0.08, 0.08), x = Math.cos(a) * rx, y = Math.sin(a) * ry;
+    pts.push([cx + x * c - y * s, cy + x * s + y * c]);
+  }
+  return pts;
+}
+function bboxOf(polys) {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const p of polys) for (const [x, y] of p) {
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+  }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+// פיסת נייר בצבע אחד. torn = שוליים קרועים עם ליבה לבנה
+function P(polys, color, o = {}) {
+  if (typeof polys[0][0] === 'number') polys = [polys];
+  const res = {
+    polys: polys.map(p => o.raw ? p : rough(p, o.amp ?? 1.4, o.step ?? 16)),
+    color, detail: !!o.detail, rule: o.rule || 'nonzero', edge: o.edge !== false,
+  };
+  if (o.torn) { res.fringe = polys.map(p => rough(p, o.torn, 5)); res.fringeColor = o.fringeColor || '#fbf5e6'; }
+  return res;
+}
+function tr(g, polys) {
+  g.beginPath();
+  for (const poly of polys) {
+    g.moveTo(poly[0][0], poly[0][1]);
+    for (let i = 1; i < poly.length; i++) g.lineTo(poly[i][0], poly[i][1]);
+    g.closePath();
+  }
+}
+let shK = DPR;                          // גודל הצל תלוי בזום הנוכחי
+function sh(g, b, x, y, c, k = shK) { g.shadowBlur = b * k; g.shadowOffsetX = x * k; g.shadowOffsetY = y * k; g.shadowColor = c; }
+
+// ---------- מרקם נייר (כתמים, סיבים, גרעין) ----------
+const TEX = (() => {
+  const S = 256, c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d'), r = mulberry32(77);
+  for (let i = 0; i < 160; i++) {
+    const x = r() * S, y = r() * S, rad = 6 + r() * 26;
+    g.fillStyle = `rgba(70,45,20,${(0.006 + r() * 0.016).toFixed(3)})`;
+    for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]) { g.beginPath(); g.arc(x + ox, y + oy, rad, 0, 7); g.fill(); }
+  }
+  for (let i = 0; i < 170; i++) {
+    const x = r() * S, y = r() * S, a = r() * Math.PI, l = 4 + r() * 14;
+    g.strokeStyle = r() < .55 ? `rgba(255,255,255,${(.25 + r() * .3).toFixed(2)})` : `rgba(50,30,10,${(.06 + r() * .08).toFixed(2)})`;
+    g.lineWidth = .5 + r() * .7;
+    g.beginPath(); g.moveTo(x, y);
+    g.quadraticCurveTo(x + Math.cos(a) * l / 2 + (r() - .5) * 4, y + Math.sin(a) * l / 2 + (r() - .5) * 4, x + Math.cos(a) * l, y + Math.sin(a) * l);
+    g.stroke();
+  }
+  const img = g.getImageData(0, 0, S, S), d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const an = r() * 20 / 255, a0 = d[i + 3] / 255, a = an + a0 * (1 - an);
+    if (a > 0) for (let j = 0; j < 3; j++) d[i + j] = d[i + j] * a0 * (1 - an) / a;
+    d[i + 3] = a * 255;
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+})();
+
+// ---------- ספרייט = גזיר מוכן (נצבע פעם אחת, מוזז בכל פריים) ----------
+function sprite(paths, o = {}) {
+  const pad = o.pad ?? 10;
+  const bb = o.bb || bboxOf(paths.flatMap(p => p.fringe ? p.fringe.concat(p.polys) : p.polys));
+  const w = Math.ceil(bb.w + pad * 2), h = Math.ceil(bb.h + pad * 2);
+  // רזולוציה גבוהה, כדי שהגזירים יישארו חדים גם כשהמצלמה מתקרבת
+  const SS = w * h > 250000 ? DPR * 1.2 : w * h > 60000 ? DPR * 1.5 : DPR * 2.2, prevK = shK; shK = SS;
+  const c = document.createElement('canvas'); c.width = Math.ceil(w * SS); c.height = Math.ceil(h * SS);
+  const g = c.getContext('2d');
+  g.scale(SS, SS); g.translate(pad - bb.x, pad - bb.y);
+  for (const p of paths) {
+    if (p.fringe) { tr(g, p.fringe); g.fillStyle = p.fringeColor; g.fill(); }
+    if (p.detail) sh(g, 3, 1.2, 1.8, 'rgba(40,24,10,.4)');
+    tr(g, p.polys); g.fillStyle = p.color; g.fill(p.rule);
+    sh(g, 0, 0, 0, 'rgba(0,0,0,0)');
+    if (p.edge) { g.lineWidth = .9; g.strokeStyle = 'rgba(255,255,255,.32)'; g.stroke(); }
+  }
+  if (o.after) o.after(g);
+  g.globalCompositeOperation = 'source-atop';
+  g.save(); g.translate(-Math.floor(R() * 256), -Math.floor(R() * 256));
+  g.fillStyle = g.createPattern(TEX, 'repeat'); g.fillRect(bb.x - pad, bb.y - pad, w + 512, h + 512);
+  g.restore();
+  shK = prevK;
+  return { c, x: bb.x - pad, y: bb.y - pad, w, h, pad };
+}
+function place(spr, x, y, rot = 0, depth = 1) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  if (depth > 0) sh(ctx, 8 * depth, 3.5 * depth, 5 * depth, 'rgba(38,22,8,.42)');
+  ctx.drawImage(spr.c, spr.x, spr.y, spr.w, spr.h);
+  ctx.restore();
+}
+
+// הנפשות קצרות, פריים-פריים. n = כמה פריימים לוקחת הכניסה
+const DEFN = { none: 0, pop: 3, drop: 4, slide: 4, roll: 8, tumble: 6, flip: 5, rise: 3, unroll: 5, unrollX: 6 };
+const easeOut = x => 1 - Math.pow(1 - x, 3);
+const easeOutBack = (x, s = 1.7) => 1 + (s + 1) * Math.pow(x - 1, 3) + s * Math.pow(x - 1, 2);
+function animState(p, k) {
+  const n = p.n ?? DEFN[p.anim] ?? 0, st = { dx: 0, dy: 0, rot: 0, sc: 1, sx: 1, reveal: 1, clipY: null, revealX: 1 };
+  if (k >= n) return st;
+  const l = (k + 1) / n, from = p.from || [0, 0];
+  switch (p.anim) {
+    case 'pop': st.sc = [.45, 1.15, .95][k] ?? 1; break;
+    case 'drop': { const e = easeOutBack(l, 1.6); st.dy = -(1 - e) * (p.dist ?? 160); st.rot = (1 - e) * (p.spin ?? .25); break; }
+    case 'slide': { const e = easeOutBack(l, 1.3); st.dx = (1 - e) * from[0]; st.dy = (1 - e) * from[1]; break; }
+    case 'roll': { const e = easeOut(l); st.dx = (1 - e) * from[0]; st.dy = (1 - e) * from[1]; st.rot = -st.dx / (p.radius || 60); break; }
+    case 'tumble': { const e = easeOutBack(l, 1.2); st.dx = (1 - e) * from[0]; st.dy = (1 - e) * from[1]; st.rot = (1 - e) * (p.turns ?? 1) * Math.PI * 2; break; }
+    case 'flip': st.sx = Math.cos(Math.PI * (1 - l)); st.dy = -(1 - l) * 24; break;
+    case 'rise': st.dy = [.75, .3, -.03][k] * p.bbw.h; st.clipY = p.base; break;
+    case 'unroll': st.reveal = [.2, .4, .6, .8, .94][k]; break;
+    case 'unrollX': st.revealX = (k + 1) / n * .96; break;
+  }
+  return st;
+}
+function drawPiece(p, cf, bf) {
+  const af = appearF(p.at);
+  if (cf < af) return;
+  let ex = null;
+  if (p.until !== undefined) {
+    const k2 = cf - appearF(p.until);
+    if (k2 >= 0) {
+      if (p.exit !== 'fall' || k2 >= 5) return;
+      ex = { dx: -(k2 + 1) * 16, dy: (k2 + 1) * (k2 + 1) * 16, rot: -(k2 + 1) * .32 };   // נופל ומתגלגל החוצה
+    }
+  }
+  if (p.draw) { p.draw(cf, bf); return; }
+  const st = animState(p, cf - af);
+  let dx = st.dx, dy = st.dy, rot = p.rot0 + st.rot * (p.spinDir || 1);
+  if (ex) { dx += ex.dx; dy += ex.dy; rot += ex.rot; }
+  const jr = mulberry32(bf * 7919 + p.id * 104729 + 1), J = p.jit;
+  dx += (jr() - .5) * 2.2 * J; dy += (jr() - .5) * 2.2 * J; rot += (jr() - .5) * .012 * J;
+  if (p.swing) rot += 0.05 * Math.sin(bf * 0.7 + p.id);
+
+  const s = p.spr;
+  ctx.save();
+  if (p.stretch) applyStretch();
+  if (p.shift) ctx.translate(p.shift, 0);
+  if (st.clipY !== null) { ctx.beginPath(); ctx.rect(-200, -1000, W + 400, st.clipY + 1000); ctx.clip(); }
+  if (st.reveal < 1) { ctx.beginPath(); ctx.rect(s.x - 20, s.y, s.w + 40, s.pad + (s.h - 2 * s.pad) * st.reveal); ctx.clip(); }
+  const rxEdge = s.x + s.w - s.pad - (s.w - 2 * s.pad) * st.revealX;               // נפרש מימין לשמאל
+  if (st.revealX < 1) { ctx.beginPath(); ctx.rect(rxEdge, s.y - 20, s.x + s.w - rxEdge + 20, s.h + 40); ctx.clip(); }
+  ctx.translate(p.px + dx, p.py + dy); ctx.rotate(rot); ctx.scale(st.sc * Math.abs(st.sx) || .02, st.sc);
+  if (p.depth > 0) sh(ctx, 8 * p.depth, 3.5 * p.depth, 5 * p.depth, 'rgba(38,22,8,.42)');
+  const img = st.sx < 0 && p.back ? p.back : s;                                       // צד אחורי של הנייר
+  ctx.drawImage(img.c, img.x - p.px, img.y - p.py, img.w, img.h);
+  ctx.restore();
+  if (st.reveal < 1 && p.roll) {                                                       // גליל הבד
+    ctx.save(); if (p.shift) ctx.translate(p.shift, 0);
+    place(p.roll, s.x + s.w / 2 + dx, s.y + s.pad + (s.h - 2 * s.pad) * st.reveal + dy, 0);
+    ctx.restore();
+  }
+  if (st.revealX < 1 && p.roll) place(p.roll, rxEdge, p.py + dy, 0);
+}
+
+
+const C = {
+  sky: '#86c9dc', sky2: '#a9dbe6', sun: '#fcd03f', sunIn: '#fde68a', ray: '#f7a531', cloud: '#fbf6ea',
+  hill1: '#a3cf88', hill2: '#7fb865', ground: '#5d9f47', tuft: '#4a8a3a', leaf: '#5a9a42',
+  wood: '#a86b3c', woodL: '#c98a52', woodD: '#7a4826',
+  wall: '#f3e7cc', wallS: '#e0cda4', blue: '#2f6db5', red: '#d9483b', gold: '#e9b02c',
+};
+const PAPER = ['#e3343f', '#f2b134', '#2f86d6', '#4caf50', '#ef7a36', '#8e55b8'];
+
+
+function landscape() {
+piece([P(rect(-100, -60, W + 200, H + 120), C.sky, { raw: true, edge: false })], { depth: 0, jit: 0, rot0: 0, k: .15 });
+{
+  const pts = [];
+  for (let x = -60; x <= 1340; x += 60) pts.push([x, 330 + 14 * Math.sin(x / 150)]);
+  pts.push([1340, 780], [-60, 780]);
+  piece([P(pts, C.sky2, { torn: 3 })], { depth: .3, jit: .3, rot0: 0, k: .3 });
+}
+{ // שמש עם פנים
+  const SX = 1130, SY = 118, rays = [];
+  for (let i = 0; i < 12; i++) {
+    const a = i / 12 * Math.PI * 2;
+    rays.push([[Math.cos(a - .16) * 56, Math.sin(a - .16) * 56], [Math.cos(a) * 100, Math.sin(a) * 100],
+               [Math.cos(a + .16) * 56, Math.sin(a + .16) * 56]].map(([x, y]) => [x + SX, y + SY]));
+  }
+  const arc = (cx, cy, r, a0, a1, th) => { const o = []; for (let a = a0; a <= a1 + 1e-6; a += (a1 - a0) / 6) o.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    for (let a = a1; a >= a0 - 1e-6; a -= (a1 - a0) / 6) o.push([cx + (r - th) * Math.cos(a), cy + (r - th) * Math.sin(a)]); return o; };
+  piece([P(rays, C.ray, { amp: 1.2, step: 12 }), P(ell(SX, SY, 60), C.sun, { amp: 1 }), P(ell(SX, SY, 44), C.sunIn, { detail: true, amp: .8 }),
+         P([arc(SX - 17, SY - 10, 9, .15 * Math.PI, .85 * Math.PI, 2.6), arc(SX + 17, SY - 10, 9, .15 * Math.PI, .85 * Math.PI, 2.6)], '#9a5a1c', { detail: true, amp: .2, step: 30 }),
+         P(arc(SX, SY + 4, 18, .2 * Math.PI, .8 * Math.PI, 3.5), '#b9472a', { detail: true, amp: .2, step: 30 }),
+         P([ell(SX - 30, SY + 10, 8, 5), ell(SX + 30, SY + 10, 8, 5)], '#f59a6a', { detail: true, amp: .4 })],
+        { at: 5.5, anim: 'roll', from: [420, 0], radius: 100, px: SX, py: SY, k: .2 });   // השמש מתגלגלת פנימה
+}
+function cloud(cx, cy, k, at, from) {
+  const bits = off => [[-60, 10, 32], [-22, -10, 42], [26, -4, 36], [62, 12, 26]].map(([x, y, r]) => ell(cx + x * k + off, cy + y * k + off, r * k))
+    .concat([ell(cx + off, cy + 20 * k + off, 80 * k, 18 * k)]);
+  piece([P(bits(7), '#dbe9ee', { amp: 1.2, step: 10 }), P(bits(0), C.cloud, { amp: 1.2, step: 10, torn: 2.5, fringeColor: '#ffffff' })],
+        { at, anim: 'slide', from, depth: .7, k: .3 });
+}
+cloud(190, 180, 1, 5.8, [-420, 0]); cloud(1000, 275, .8, 6.0, [360, 0]); cloud(620, 120, .55, 6.2, [0, -200]);
+const hill1Y = x => 478 + 26 * Math.sin(x / 190 + 0.4) + 10 * Math.sin(x / 60);
+{
+  const pts = [];
+  for (let x = -60; x <= 1340; x += 40) pts.push([x, hill1Y(x)]);
+  pts.push([1340, 780], [-60, 780]);
+  // שדות מעובדים: פסים של נייר בגוונים
+  const fields = [];
+  for (let i = 0; i < 5; i++) { const x0 = 40 + i * 260 + rnd(-30, 30); fields.push([[x0, hill1Y(x0) + 22], [x0 + 150, hill1Y(x0 + 150) + 22], [x0 + 170, hill1Y(x0 + 170) + 48], [x0 + 20, hill1Y(x0 + 20) + 48]]); }
+  piece([P(pts, C.hill1, { torn: 3.5 }), P(fields, '#b8d98c', { detail: true, amp: 1 })], { depth: .6, jit: .5, rot0: 0, k: .5 });
+}
+// כפר רחוק: בתים עם גגות אדומים, מגדל מים וברושים
+function house(x, s, at) {
+  const y = hill1Y(x) + 10;
+  piece([P(rect(x - 18 * s, y - 26 * s, 36 * s, 28 * s), '#f4ecd8', { amp: .6, step: 10 }),
+         P([[x - 24 * s, y - 25 * s], [x, y - 46 * s], [x + 24 * s, y - 25 * s]], '#c8553d', { amp: .6, step: 10 }),
+         P([rect(x - 12 * s, y - 20 * s, 7 * s, 7 * s), rect(x + 5 * s, y - 20 * s, 7 * s, 7 * s)], '#6aa3c8', { detail: true, amp: .3 }),
+         P(rect(x - 3 * s, y - 11 * s, 6 * s, 12 * s), '#8a5530', { detail: true, amp: .3 })],
+        { at, anim: 'pop', px: x, py: y, depth: .5, k: .5, jit: .6 });
+}
+house(300, 1, 5.9); house(352, .85, 6.0); house(870, .9, 6.1); house(925, 1.05, 6.2);
+{
+  const x = 800, y = hill1Y(800) + 8;
+  piece([P([rect(x - 16, y - 50, 4, 52), rect(x + 12, y - 50, 4, 52), [[x - 14, y - 30], [x + 14, y - 12], [x + 14, y - 8], [x - 14, y - 26]]], '#9a8f80', { amp: .4, step: 10 }),
+         P(rect(x - 22, y - 86, 44, 38), '#dcd3c3', { amp: .7, step: 10 }), P([[x - 25, y - 85], [x, y - 102], [x + 25, y - 85]], '#b9b0a0', { amp: .6, step: 10 }),
+         P(rect(x - 22, y - 70, 44, 4), '#9a8f80', { detail: true, amp: .3 })], { at: 6.0, anim: 'pop', px: x, py: y, depth: .5, k: .5, jit: .6 });
+}
+[[232, 1], [1012, .9], [1040, 1.1], [390, .8]].forEach(([x, s], i) => {
+  const y = hill1Y(x) + 12;
+  piece([P(ell(x, y - 34 * s, 9 * s, 36 * s), '#3f7a3a', { amp: .8, step: 10 }), P(ell(x - 3 * s, y - 40 * s, 3 * s, 20 * s), '#57924b', { detail: true, amp: .4 })],
+        { at: 5.9 + i * .1, anim: 'pop', px: x, py: y, depth: .5, k: .5, jit: .6 });
+});
+function tree(x, y, r, at) {
+  piece([P(rect(x - 6, y - r - 10, 12, r + 12), C.woodD, { amp: .8 }), P(ell(x, y - r - 16, r, r * 1.1), C.leaf),
+         P(ell(x - r * .3, y - r - 24, r * .45), '#78b65a', { detail: true, amp: .7 }),
+         P([ell(x + r * .3, y - r - 6, 4), ell(x - r * .1, y - r - 30, 4), ell(x + r * .45, y - r - 28, 3.5)], '#e3343f', { detail: true, amp: .3 })],
+        { at, anim: 'pop', px: x, py: y, depth: .7, k: .55 });
+}
+tree(110, 470, 34, 6.0); tree(1175, 470, 30, 6.2); tree(1075, 492, 22, 6.4);
+const hill2Y = x => 548 + 22 * Math.sin(x / 130 + 1.3);
+{
+  const pts = [];
+  for (let x = -60; x <= 1340; x += 40) pts.push([x, hill2Y(x)]);
+  pts.push([1340, 780], [-60, 780]);
+  const bushes = [];
+  for (const x of [40, 330, 470, 980, 1215]) bushes.push(ell(x - 14, hill2Y(x) + 2, 20, 14), ell(x + 10, hill2Y(x) - 4, 24, 18), ell(x + 32, hill2Y(x) + 4, 16, 12));
+  piece([P(bushes, '#5f9c4c', { amp: .8, step: 10 }), P(pts, C.hill2, { torn: 3.5 })], { depth: .7, jit: .5, rot0: 0, k: .7 });
+}
+// גדר עץ לבנה מאחורי שלומית
+{
+  const pick = [];
+  for (let x = 1000; x < 1330; x += 27) pick.push([[x, 562], [x + 8, 548], [x + 16, 562], [x + 16, 622], [x, 622]]);
+  piece([P([rect(990, 570, 350, 8), rect(990, 598, 350, 8)], '#d6c29a', { amp: .7 }), P(pick, '#f3e6c9', { amp: .7, step: 12 })],
+        { at: 0, depth: .8, jit: .5, k: .95 });
+}
+const groundY = x => 612 + 6 * Math.sin(x / 70);
+{
+  const pts = [];
+  for (let x = -60; x <= 1340; x += 40) pts.push([x, groundY(x)]);
+  pts.push([1340, 780], [-60, 780]);
+  piece([P(pts, C.ground, { torn: 3.5 }), P([ell(80, 700, 60, 10), ell(620, 700, 140, 12), ell(1100, 708, 90, 10)], '#6aad52', { detail: true, amp: 1.2 })],
+        { depth: .9, jit: .5, rot0: 0 });
+  const tufts = [];
+  for (let x = -40; x < 1320; x += rnd(18, 30)) {
+    const g = groundY(x + 6);
+    tufts.push([[x, g + 5], [x + 4, g - rnd(9, 16)], [x + 7, g + 1], [x + 10, g - rnd(8, 14)], [x + 14, g + 5]]);
+  }
+  piece([P(tufts, C.tuft, { amp: .6, step: 8 })], { at: .2, anim: 'pop', jit: .5, px: 640, py: 612 });
+  const stones = [[180, 648, 12], [860, 700, 9], [960, 690, 14], [1240, 650, 10], [420, 690, 8]];
+  piece([P(stones.map(([x, y, r]) => ell(x, y, r, r * .7)), '#a8a39a', { amp: .6 }),
+         P(stones.map(([x, y, r]) => ell(x - r * .3, y - r * .25, r * .4, r * .25)), '#cfcac0', { detail: true, amp: .3 })], { at: .2, anim: 'pop', jit: .6, px: 640, py: 680 });
+}
+function flower(x, y, col, at) {
+  const petals = [];
+  for (let i = 0; i < 5; i++) { const a = i / 5 * Math.PI * 2; petals.push(ell(x + Math.cos(a) * 10, y + Math.sin(a) * 10, 8)); }
+  piece([P(rect(x - 2, y, 4, 36), C.tuft, { amp: .5, step: 8 }), P([[x, y + 22], [x - 16, y + 12], [x - 4, y + 26]], '#5fb043', { amp: .4, step: 8 }),
+         P(petals, col, { amp: .8, step: 8 }), P(ell(x, y, 6), '#f2b134', { detail: true, amp: .5 })],
+        { at, anim: 'pop', px: x, py: y + 30 });
+}
+flower(60, 670, '#e3343f', 6.3); flower(140, 694, '#ffffff', 6.5); flower(215, 662, '#8e55b8', 6.7);
+flower(1235, 700, '#ef7a36', 6.4); flower(1175, 676, '#f2b134', 6.6);
+// פרפרים: מנפנפים בכנפיים פריים-פריים
+function butterfly(x, y, col, at, seed) {
+  const wing = open => sprite(open
+    ? [P([ell(-9, -5, 9, 7, -.4), ell(9, -5, 9, 7, .4), ell(-7, 5, 6, 5, .4), ell(7, 5, 6, 5, -.4)], col, { amp: .4, step: 6 }),
+       P([ell(-10, -6, 3, 2), ell(10, -6, 3, 2)], '#fffaf0', { detail: true, amp: .2 }), P(rect(-1.5, -9, 3, 18), '#3a2a2a', { detail: true, amp: .2 })]
+    : [P([ell(-4, -6, 4, 9, -.2), ell(4, -6, 4, 9, .2)], col, { amp: .4, step: 6 }), P(rect(-1.5, -9, 3, 18), '#3a2a2a', { detail: true, amp: .2 })]);
+  const A = wing(true), B = wing(false);
+  add({ at, k: 1, draw(cf, bf) {
+    const r = mulberry32(bf * 17 + seed), t = cf / FPS;
+    place(bf % 2 ? A : B, x + 26 * Math.sin(t * .9 + seed) + (r() - .5) * 3, y + 14 * Math.sin(t * 1.7 + seed) + (r() - .5) * 3, (r() - .5) * .4, .6);
+  } });
+}
+butterfly(150, 610, '#f2b134', 6.8, 1); butterfly(1190, 590, '#8e55b8', 7.4, 2);
+}
+function frondPaths(cx, cy, len, ang, col) {
+  const leaves = [], c = Math.cos(ang), s = Math.sin(ang), T = ([x, y]) => [cx + x * c - y * s, cy + x * s + y * c];
+  for (let u = -len / 2 + 8; u < len / 2 - 6; u += 11) {
+    const k = Math.sin(Math.PI * (u + len / 2) / len) * .6 + .4;
+    for (const side of [-1, 1]) {
+      const L = rnd(24, 34) * k, th = rnd(.75, 1);
+      leaves.push([[u - 3.5, 0], [u + L * Math.cos(th), side * L * Math.sin(th)], [u + 3.5, 0]].map(T));
+    }
+  }
+  const spine = [[-len / 2, -2.5], [len / 2, -1], [len / 2, 1], [-len / 2, 2.5]].map(T);
+  return [P(leaves, col, { amp: .7, step: 12 }), P(spine, '#3d6b2a', { detail: true, amp: .4 })];
+}
+
+function makeKid(o) {
+  const k = { o };
+  const leg = side => sprite([P(rect(-6, -4, 12, 68), o.legs, { amp: .8, step: 12 }),
+    P(rect(-6.5, 50, 13, 10), o.sock || '#fffaf0', { amp: .4, step: 8 }),                 // גרביים
+    P(ell(side * 3, 66, 13, 7), o.shoe, { amp: .7 }),
+    P(rect(-7 + side * 3, 60, 14, 2.5), 'rgba(255,255,255,.55)', { detail: true, amp: .2 })]);
+  k.legL = leg(-1); k.legR = leg(1);
+  if (o.dress) {
+    const dots = [[-24, -80], [0, -92], [22, -78], [-12, -116], [13, -120], [-34, -70], [34, -70], [8, -72]].map(([x, y]) => ell(x, y, 4.2));
+    k.body = sprite([P([[-24, -152], [24, -152], [48, -64], [-48, -64]], o.top),
+      P(dots, '#fffaf0', { detail: true, amp: .4, step: 6 }),
+      P([[-13, -152], [13, -152], [9, -142], [0, -137], [-9, -142]], '#fffaf0', { detail: true, amp: .5, step: 6 }),
+      P([[-45, -74], [45, -74], [47.5, -65], [-47.5, -65]], '#fffaf0', { detail: true, amp: .5, step: 10 }),         // פס בשולי השמלה
+      P(rect(12, -110, 17, 15), o.pocket || '#f7a07a', { detail: true, amp: .5, step: 8 }),                         // כיס
+      P([ell(20.5, -103, 3.2, 3.2, 0, 6)], '#e3343f', { detail: true, amp: .2 })]);
+  } else {
+    k.body = sprite([P(rect(-25, -98, 50, 30), o.legs), P(rect(-27, -152, 54, 58), o.top),
+      P([rect(-27, -136, 54, 6), rect(-27, -118, 54, 6)], o.stripe, { detail: true, amp: .5, step: 10 })]);
+  }
+  const armPaths = extra => [P(rect(-5, 6, 10, 54), o.skin, { amp: .6, step: 10 }), ...(extra || []),
+    P(ell(0, 62, 8.5), o.skin, { amp: .5 }), P(rect(-8, -7, 16, 24), o.top, { amp: .6, step: 10 }),
+    P(ell(0, 0, 3.4, 3.4, 0, 8), '#caa53c', { detail: true, amp: .3 })];           // ניטי מתכת (כמו בובת נייר אמיתית)
+  k.arm = sprite(armPaths());
+  k.armHammer = sprite(armPaths([P(rect(-3.5, 48, 7, 50), C.woodL, { amp: .5, step: 10 }),
+    P(rect(-17, 92, 34, 14), '#7d8791', { amp: .6, step: 10 })]));
+  // ראש + פנים + שיער קדמי
+  const smile = [];
+  for (let a = .2; a <= .8; a += .1) smile.push([12 * Math.cos(a * Math.PI), -36 + 10 * Math.sin(a * Math.PI)]);
+  for (let a = .8; a >= .2; a -= .1) smile.push([9 * Math.cos(a * Math.PI), -37 + 6 * Math.sin(a * Math.PI)]);
+  const fringe = [];
+  for (let a = Math.PI; a <= 2 * Math.PI + .01; a += Math.PI / 10) fringe.push([36 * Math.cos(a), -48 + 36 * Math.sin(a)]);
+  if (o.hair === 'short') fringe.push([35, -40], [26, -54], [-26, -54], [-35, -40]);
+  else fringe.push([30, -56], [20, -61], [10, -55], [0, -62], [-10, -55], [-20, -61], [-30, -56]);
+  const head = [P(rect(-6, -16, 12, 20), o.skin, { amp: .5, step: 10 }), P(ell(0, -46, 33, 34), o.skin, { amp: 1 }),
+    P([ell(-11, -44, 3.4, 4.6, 0, 8), ell(11, -44, 3.4, 4.6, 0, 8)], '#2b1d14', { detail: true, amp: .2 }),
+    P([ell(-19, -33, 6, 4, 0, 8), ell(19, -33, 6, 4, 0, 8)], '#f19a86', { detail: true, amp: .3 }),
+    P(smile, '#a8323a', { detail: true, amp: .2, step: 20 }),
+    P([ell(-10, -45.5, 1.3, 1.3, 0, 6), ell(12, -45.5, 1.3, 1.3, 0, 6)], '#ffffff', { detail: true, amp: .1 }),      // ברק בעיניים
+    P(ell(0, -37.5, 3.2, 2.4, 0, 8), '#e8a07c', { detail: true, amp: .2 }),                                        // אף
+    P([[[-16, -52], [-6, -54.5], [-6, -52.5], [-16, -50]], [[16, -52], [6, -54.5], [6, -52.5], [16, -50]]], o.hairCol, { detail: true, amp: .2, step: 20 }),
+    P(fringe, o.hairCol, { detail: true, amp: .8, step: 10 }),
+    P([rect(-18, -74, 1.4, 12), rect(-6, -80, 1.4, 16), rect(8, -79, 1.4, 14), rect(20, -73, 1.4, 11)], 'rgba(255,255,255,.28)', { detail: true, amp: .2, step: 20 })];
+  if (o.kippah) head.push(P(ell(0, -82, 17, 6), o.kippah, { detail: true, amp: .5 }));
+  k.head = sprite(head);
+  // שיער מאחור
+  const back = [];
+  if (o.hair === 'braids') {
+    const pl = [ell(0, -50, 38, 38)];
+    for (const s of [-1, 1]) pl.push(ell(s * 35, -28, 9, 11), ell(s * 38, -10, 9, 11), ell(s * 41, 8, 8, 10));
+    back.push(P(pl, o.hairCol, { amp: .8, step: 10 }));
+    back.push(P([-1, 1].flatMap(s2 => [-19, -1].map(y => rect(s2 * 37 - 6, y, 12, 1.6))), 'rgba(0,0,0,.25)', { detail: true, amp: .2, step: 20 }));
+    back.push(P([[[-42, 22], [-58, 12], [-57, 33]], [[-42, 22], [-27, 12], [-28, 33]], [[42, 22], [58, 12], [57, 33]], [[42, 22], [27, 12], [28, 33]]], o.bow, { detail: true, amp: .4, step: 8 }));
+  } else if (o.hair === 'pony') {
+    back.push(P([ell(0, -50, 37, 37), ell(40, -34, 12, 30, -.5)], o.hairCol, { amp: .8, step: 10 }));
+    back.push(P(ell(30, -58, 7, 7), o.bow, { detail: true, amp: .3 }));
+  } else back.push(P(ell(0, -52, 36, 34), o.hairCol, { amp: .8 }));
+  k.hairBack = sprite(back);
+  k.planks = sprite([P(rect(-78, -106, 156, 9), C.wood, { amp: .7 }), P(rect(-72, -97, 150, 9), C.woodL, { amp: .7 }), P(rect(-80, -88, 158, 9), C.woodD, { amp: .7 })]);
+  k.branch = sprite(frondPaths(0, -222, 230, .04, '#5fb043'));
+  const chain = [];
+  for (let i = 0; i < 9; i++) {
+    const x = -80 + i * 20, y = -128 + 16 * (1 - Math.pow(x / 84, 2)), col = PAPER[i % PAPER.length];
+    chain.push(i % 2 === 0 ? P([ell(x, y, 11, 8, 0, 14), ell(x, y, 6.5, 3.8, 0, 10).reverse()], col, { amp: .4, step: 6, rule: 'evenodd' })
+                           : P(ell(x, y, 12, 3, 0, 10), col, { amp: .3, step: 6 }));
+  }
+  k.chain = sprite(chain);
+  return k;
+}
+function pose(name, walk, ph) {
+  const p = {
+    stand:   { aL: .14, aR: -.14 },
+    carry:   { aL: .5, aR: -.5, prop: 'planks' },
+    hammer:  { aL: ph ? 2.5 : 1.45, aR: -.14, armL: 'armHammer' },
+    present: { aL: 1.55, aR: -.2 },
+    lift:    { aL: 2.85, aR: -2.85, prop: 'branch' },
+    chain:   { aL: 1.3, aR: -1.3, prop: 'chain' },
+    cheer:   { aL: ph ? 2.6 : 2.2, aR: ph ? -2.2 : -2.6, bob: ph ? -7 : 0 },
+  }[name];
+  const q = Object.assign({ lL: 0, lR: 0, bob: 0 }, p);
+  if (walk) {
+    q.lL = ph ? .26 : -.2; q.lR = ph ? -.2 : .26; q.bob = ph ? -4 : 0;
+    if (name === 'stand') { q.aL = ph ? .4 : -.15; q.aR = ph ? .15 : -.4; }
+  }
+  return q;
+}
+function segX(segs, bt) {
+  let seg = null, x = segs[0].x0;
+  for (const s of segs) { if (bt >= s.from && bt < s.to) { seg = s; break; } if (s.x1 !== undefined) x = s.x1; else if (s.x0 !== undefined) x = s.x0; }
+  if (seg && seg.x1 !== undefined) x = seg.x0 + (seg.x1 - seg.x0) * clamp((bt - seg.from) / (seg.to - seg.from), 0, 1);
+  else if (seg && seg.x0 !== undefined) x = seg.x0;
+  return { seg, x };
+}
+
+const font = size => `${size}px "Secular One", Rubik, "Arial Hebrew", sans-serif`;
+function letterSprites(ch, x, y, size, col, backing) {
+  const w = (ctx.font = font(size), ctx.measureText(ch).width);
+  const bb = { x: x - w / 2 - 12, y: y - size * .64, w: w + 24, h: size * 1.28 };
+  const drawIt = (g, fill) => {
+    g.font = font(size); g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+    if (backing) { g.lineWidth = size * .1; g.strokeStyle = backing; g.strokeText(ch, x, y); }
+    if (fill) { sh(g, 2, 1, 1.5, 'rgba(40,24,10,.3)'); g.fillStyle = fill; g.fillText(ch, x, y); sh(g, 0, 0, 0, 'rgba(0,0,0,0)'); }
+  };
+  return { front: sprite([], { bb, after: g => drawIt(g, col) }),
+           back: sprite([], { bb, after: g => { drawIt(g, null); g.fillStyle = '#efe4cc'; g.fillText(ch, x, y); } }) };
+}
+function layoutLine(text, size, gap) {
+  ctx.font = font(size);
+  const chars = [...text], widths = chars.map(ch => ch === ' ' ? size * .35 : ctx.measureText(ch).width);
+  const total = widths.reduce((a, b) => a + b, 0) + gap * (chars.length - 1);
+  let xr = 640 + total / 2; const out = [];
+  chars.forEach((ch, i) => { const x = xr - widths[i] / 2; xr -= widths[i] + gap; if (ch !== ' ') out.push({ ch, x }); });
+  return out;                                                   // מימין לשמאל
+}
+
+function foreground() {
+  const blade = (x, y, h, lean, w) => [[x - w, y], [x + lean * .6, y - h * .6], [x + lean, y - h], [x + lean * .5 + w * .3, y - h * .55], [x + w, y]];
+  const L = [], Rr = [];
+  for (let i = 0; i < 7; i++) L.push(blade(-30 + i * 24, 760, rnd(60, 115), rnd(-10, 30), rnd(8, 13)));
+  for (let i = 0; i < 7; i++) Rr.push(blade(1160 + i * 24, 760, rnd(60, 115), rnd(-30, 10), rnd(8, 13)));
+  piece([P(L, '#3d7a32', { amp: .8, step: 12 }), P(L.slice(0, 4).map(b => b.map(([x, y]) => [x + 10, y + 6])), '#4f9140', { amp: .8, step: 12 })],
+        { at: .2, anim: 'slide', from: [0, 160], k: 1.3, depth: 1.2 });
+  piece([P(Rr, '#3d7a32', { amp: .8, step: 12 }), P(Rr.slice(3).map(b => b.map(([x, y]) => [x - 10, y + 6])), '#4f9140', { amp: .8, step: 12 })],
+        { at: .4, anim: 'slide', from: [0, 160], k: 1.3, depth: 1.2 });
+}
+
+
+
+// ============================================================
+//  תזמון לפי השיר (ניתוח של ההקלטה): 4 בתים × 6 שורות, ~103 פעימות לדקה
+// ============================================================
+const SONG = { S: [22.15, 64.25, 106.6, 148.45], LEN: [7.02, 7.06, 6.97, 7.0], BEAT: 0.5847, MUSIC_END: 196.4, END: 198.5 };
+const L = (s, i, f = 0) => SONG.S[s - 1] + (i - 1 + f) * SONG.LEN[s - 1];           // בית s, שורה i
+const snap = t => SONG.S[0] + Math.round((t - SONG.S[0]) / SONG.BEAT) * SONG.BEAT;    // לפעימה הקרובה
+const beatPh = t => ((((t - SONG.S[0]) / SONG.BEAT) % 1) + 1) % 1;
+const beatN = t => Math.floor((t - SONG.S[0]) / SONG.BEAT);
+
+// ============================================================
+//  מנוע סצנות: כל סצנה מצוירת לקנבס משלה, ומעברים מרכיבים ביניהן
+// ============================================================
+const appearF = at => Math.round(at * FPS);
+let SC = null, TSHIFT = 0, PID = 0, STRETCH = 1;
+const SCENES = [];
+function scene(id, from, bg = '#2a1d12') {
+  const c = document.createElement('canvas'); c.width = W * DPR; c.height = H * DPR;
+  SC = { id, from, bg, cam: [[0, 1, 640, 360], [999, 1, 640, 360]], pieces: [], canvas: c, g: c.getContext('2d'), shake: () => 1, stretch: null };
+  SCENES.push(SC); return SC;
+}
+function add(o) {
+  o.id = PID++; o.scene = SC;
+  if (o.jit === undefined) o.jit = 1;
+  if (o.depth === undefined) o.depth = 1;
+  if (o.rot0 === undefined) o.rot0 = rnd(-0.008, 0.008);
+  if (o.k === undefined) o.k = 1;
+  if (!o.noShift) { o.at = (o.at || 0) + TSHIFT; if (o.until !== undefined) o.until += TSHIFT; }
+  SC.pieces.push(o); return o;
+}
+function piece(paths, o) {
+  const spr = sprite(paths, o);
+  const bb = bboxOf(paths.flatMap(p => p.polys));
+  return add(Object.assign({ spr, px: bb.x + bb.w / 2, py: bb.y + bb.h / 2, anim: 'none', at: 0 }, o, { bbw: bb }));
+}
+function applyStretch() { if (STRETCH !== 1) { ctx.translate(520, 0); ctx.scale(STRETCH, 1); ctx.translate(-520, 0); } }
+function camAt(sc, T) {
+  const K = sc.cam; let i = 0;
+  while (i < K.length - 2 && T >= K[i + 1][0]) i++;
+  const a = K[i], b = K[i + 1], l = clamp((T - a[0]) / (b[0] - a[0]), 0, 1), e = .5 - .5 * Math.cos(Math.PI * l);
+  const X = v => typeof v === 'function' ? v(T) : v;
+  const z = a[1] + (b[1] - a[1]) * e;
+  let x = X(a[2]) + (X(b[2]) - X(a[2])) * e, y = a[3] + (b[3] - a[3]) * e;
+  x = clamp(x, 640 / z, W - 640 / z); y = clamp(y, 360 / z, H - 360 / z);
+  return { z, x, y };
+}
+function applyCam(c, k) {
+  const zk = 1 + (c.z - 1) * k;
+  ctx.translate(640, 360); ctx.scale(zk, zk); ctx.translate(-(640 + (c.x - 640) * k), -(360 + (c.y - 360) * k));
+  shK = DPR * zk;
+}
+
+// ============================================================
+//  דמויות: בובות נייר
+// ============================================================
+function posePlus(name, walk, ph, T) {
+  const bp = beatPh(T) < .5 ? 0 : 1, bn = beatN(T) % 2;
+  const extra = {
+    finger: { aL: .14, aR: -2.75 },
+    sniff: { aL: .9, aR: -.9, tilt: -.12 },
+    wave: { aL: .14, aR: bn ? -2.3 : -2.8 },
+    sit: { aL: .5, aR: -.5 },
+  }[name];
+  if (extra) return Object.assign({ lL: 0, lR: 0, bob: 0 }, extra);
+  const q = pose(name, walk, name === 'hammer' ? bp : name === 'cheer' ? bn : ph);
+  return q;
+}
+function kid(k, y, segs, sc = 1) {
+  k.segs = segs;
+  add({ at: segs[0].from, noShift: true, draw(cf, bf) {
+    const T = cf / FPS, { seg, x } = segX(segs, T);
+    if (!seg) return;
+    const q = posePlus(seg.pose, seg.walk, (cf + (seg.phase || 0)) % 2, T + (seg.phase || 0) * SONG.BEAT);
+    const jr = mulberry32(bf * 131 + k.o.seed), J = () => jr() - .5, s = (seg.scale || sc) * k.o.scale;
+    ctx.save();
+    ctx.translate(x + J() * 2.4, (seg.y || y) + q.bob + J() * 2.4); ctx.scale(s, s);
+    if (seg.pop !== undefined) { const kk = cf - appearF(seg.from); if (kk < 3) ctx.scale(1, [.4, 1.12, .96][kk]); }
+    place(k.hairBack, 0, -150, J() * .03);
+    place(k.legL, -9, -72, q.lL + J() * .04);
+    place(k.legR, 9, -72, q.lR + J() * .04);
+    place(k.body, 0, 0, J() * .015);
+    if (q.prop === 'planks') place(k.planks, 0, 0, J() * .02);
+    place(k[q.armL || 'arm'], -24, -146, q.aL + J() * .05);
+    place(k.arm, 24, -146, q.aR + J() * .05);
+    place(k.head, 0, -150, J() * .05 + (q.tilt || 0));
+    if (q.prop === 'branch' || q.prop === 'chain') place(k[q.prop], 0, 0, J() * .02);
+    ctx.restore();
+  } });
+}
+// אנשים קטנים לקהל השכנים
+function makePerson(seed, top, skin, hair) {
+  const r = mulberry32(seed), tall = .9 + r() * .25;
+  return sprite([P([rect(-10, -52 * tall, 8, 52 * tall), rect(2, -52 * tall, 8, 52 * tall)], '#3d4f6b', { amp: .6, step: 10 }),
+    P([[-18, -112 * tall], [18, -112 * tall], [26, -48 * tall], [-26, -48 * tall]], top, { amp: .8, step: 12 }),
+    P(ell(0, -132 * tall, 19), skin, { amp: .7 }), P([[-19, -134 * tall], [0, -156 * tall], [19, -134 * tall], [12, -142 * tall], [-12, -142 * tall]], hair, { amp: .6, step: 8 }),
+    P([ell(-6, -132 * tall, 2, 2.6, 0, 6), ell(6, -132 * tall, 2, 2.6, 0, 6)], '#2b1d14', { detail: true, amp: .1 }),
+    P(ell(0, -124 * tall, 5, 2, 0, 8), '#a8323a', { detail: true, amp: .1 })]);
+}
+function crowdMember(spr, x, y, at, sc = 1, cheerAt = 1e9) {
+  add({ at, noShift: true, spr, draw(cf, bf) {
+    const T = cf / FPS, kk = cf - appearF(at), jr = mulberry32(bf * 53 + x | 0);
+    const s = sc * (kk < 3 ? [.4, 1.12, .96][kk] : 1), bob = T > cheerAt && beatN(T) % 2 ? -6 : 0;
+    ctx.save(); ctx.translate(x + (jr() - .5) * 2, y + bob + (jr() - .5) * 2); ctx.scale(sc, s);
+    place(spr, 0, 0, (jr() - .5) * .04, .8); ctx.restore();
+  } });
+}
+
+// ============================================================
+//  חלקי סוכה (בקואורדינטות של הסוכה, מוזזת 120 שמאלה)
+// ============================================================
+const SHIFT = -120;
+const sk = (paths, o) => piece(paths, Object.assign({ shift: SHIFT }, o));
+const rollSpr = (w, col) => sprite([P(rect(-w / 2 - 4, -8, w + 8, 16), col, { amp: .8 }), P(rect(-w / 2, -5, w, 3), 'rgba(255,255,255,.4)', { detail: true, amp: .3 })]);
+function post(x, y, w, h, at, anim = 'rise', o = {}) {
+  const grain = [];
+  for (let i = 0; i < 4; i++) { const gx = x + w * rnd(.45, .85), gy = y + rnd(20, h - 90); grain.push(rect(gx, gy, 1.3, rnd(30, 70))); }
+  sk([P(rect(x, y, w, h), C.wood), P(rect(x + w * .25, y + 8, w * .18, h - 16), C.woodL, { detail: true, amp: .6 }),
+      P(grain, '#7a4826', { detail: true, amp: .3, step: 20 }), P([ell(x + w / 2, y + 12, 2.6, 2.6, 0, 6)], '#6b6f75', { detail: true, amp: .2 })],
+     Object.assign({ at, anim, base: y + h, px: x + w / 2, py: y + h }, o));
+}
+function sideWall(xf, xb, at, anim = 'unroll', o = {}) {
+  const ty = x => 308 + (x - xf) / (xb - xf) * (274 - 308), by = x => 640 + (x - xf) / (xb - xf) * (580 - 640);
+  const s1 = xf + (xb - xf) * .15, s2 = xf + (xb - xf) * .28;
+  const s = sk([P([[xf, ty(xf)], [xb, ty(xb)], [xb, by(xb)], [xf, by(xf)]], C.wallS),
+                P([[s1, ty(s1)], [s2, ty(s2)], [s2, by(s2)], [s1, by(s1)]], C.blue, { detail: true, amp: .6 })], Object.assign({ at, anim }, o));
+  s.roll = rollSpr(Math.abs(xb - xf), '#d3bf94');
+}
+function hanging(hx, len, at, paths, o = {}) {
+  sk([P(rect(hx - .8, 312, 1.6, len + 2), '#6b4a2b', { raw: true, edge: false }), ...paths], Object.assign({ at, anim: 'drop', swing: true, px: hx, py: 312, pad: 14 }, o));
+}
+// t = זמני הופעה; st = true לסוכה גמורה (בלי הנפשות, נמתחת)
+function sukkah(t, st) {
+  const A = (name, def) => st ? 'none' : def, o = st ? { stretch: true } : {};
+  const planks = [];
+  for (let i = 1; i < 6; i++) { const xf = 404 + i * 472 / 6, xb = 470 + i * 340 / 6; planks.push([[xb - 1, 581], [xb + 1, 581], [xf + 1.5, 639], [xf - 1.5, 639]]); }
+  sk([P([[404, 640], [470, 580], [810, 580], [876, 640]], '#d9a766'), P(rect(394, 638, 492, 14), '#b9864c'), P(planks, '#b9864c', { detail: true, amp: .4 })],
+     Object.assign({ at: t.floor, anim: A('f', 'pop') }, o));
+  const bw = sk([P(rect(488, 274, 304, 306), C.wall), P(rect(500, 274, 9, 306), C.blue, { detail: true, amp: .8 }), P(rect(771, 274, 9, 306), C.blue, { detail: true, amp: .8 }),
+     P(rect(488, 540, 304, 11), C.red, { detail: true, amp: .8 }), P(rect(488, 286, 304, 7), C.blue, { detail: true, amp: .8 })], Object.assign({ at: t.wallB, anim: A('w', 'unroll') }, o));
+  bw.roll = rollSpr(304, '#e6d6b0');
+  post(470, 268, 18, 312, t.postB1, A('p', 'rise'), o); post(792, 268, 18, 312, t.postB2, A('p', 'rise'), o);
+  sk([P(rect(460, 258, 360, 16), C.wood), P(rect(470, 262, 340, 3), C.woodL, { detail: true, amp: .5 })], Object.assign({ at: t.beamB, anim: A('b', 'drop') }, o));
+  sideWall(404, 470, t.wallL, A('w', 'unroll'), o); sideWall(876, 810, t.wallR, A('w', 'unroll'), o);
+  if (t.inside) t.inside();
+  post(378, 296, 26, 344, t.postF1, A('p', 'rise'), o); post(876, 296, 26, 344, t.postF2, A('p', 'rise'), o);
+  sk([P([[380, 296], [470, 262], [478, 272], [396, 308]], C.wood, { amp: .8 })], Object.assign({ at: t.beamS, anim: A('b', 'drop') }, o));
+  sk([P([[900, 296], [810, 262], [802, 272], [884, 308]], C.wood, { amp: .8 })], Object.assign({ at: t.beamS + .3, anim: A('b', 'drop'), spinDir: -1 }, o));
+  sk([P(rect(366, 288, 548, 24), C.wood), P(rect(378, 294, 524, 4), C.woodL, { detail: true, amp: .6 })], Object.assign({ at: t.beamF, anim: A('b', 'drop'), spinDir: -1, dist: 220 }, o));
+  lights(t.lights, t.lit, st);
+  const cols = ['#4f9d3a', '#5fb043', '#3f8a34', '#74b94a', '#6aa840', '#9aae45', '#58a63e', '#46913a', '#80bd52', '#4f9d3a', '#5fb043', '#3f8a34'];
+  [[430, 282, 260], [820, 280, 270], [560, 268, 300], [700, 272, 290], [470, 262, 240], [790, 258, 250],
+   [640, 286, 330], [520, 290, 230], [760, 292, 230], [600, 262, 260], [680, 290, 250], [450, 294, 200]]
+    .forEach(([x, y, len], i) => sk(frondPaths(x, y, len, rnd(-.14, .14), cols[i]),
+      Object.assign({ at: t.fronds[i] ?? t.fronds[t.fronds.length - 1], anim: A('d', 'drop'), spinDir: i % 2 ? 1 : -1 }, o)));
+  if (t.banner !== undefined) banner(t.banner, st);
+}
+// שרשרת נורות על הקורה הקדמית (נדלקות בזמן lit)
+function lights(at, litAt, st) {
+  const N = 17, bulbs = [];
+  for (let i = 0; i < N; i++) { const x = 400 + i * 480 / (N - 1); bulbs.push([x, 318 + 22 * (1 - Math.pow((x - 640) / 240, 2))]); }
+  const COL = ['#ffd24a', '#ff8a3d', '#ff5a5f', '#7fd46b', '#6ab8ff'];
+  const wire = sprite([P(bulbs.map(([x, y]) => [x, y - 1]).concat([...bulbs].reverse().map(([x, y]) => [x, y + 1.4])), '#3a2a1c', { raw: true, edge: false })], { pad: 4 });
+  const off = COL.map(c => sprite([P(ell(0, 5, 5, 7), c, { amp: .3 }), P(rect(-3, -4, 6, 4), '#6b6f75', { amp: .2 })], { pad: 4 }));
+  const glow = c => { const g = document.createElement('canvas'); g.width = g.height = 96; const x = g.getContext('2d');
+    const gr = x.createRadialGradient(48, 48, 2, 48, 48, 46); gr.addColorStop(0, c); gr.addColorStop(.35, c + '88'); gr.addColorStop(1, c + '00');
+    x.fillStyle = gr; x.fillRect(0, 0, 96, 96); return g; };
+  const GL = COL.map(glow);
+  add({ at, noShift: true, draw(cf, bf) {
+    const T = cf / FPS, lit = T >= litAt, kk = cf - appearF(at);
+    ctx.save(); if (st) applyStretch(); ctx.translate(SHIFT, 0);
+    if (kk < 3) { ctx.translate(0, [-40, -8, 2][kk]); }
+    place(wire, 0, 0, 0, .4);
+    bulbs.forEach(([x, y], i) => {
+      const c = i % COL.length, tw = lit && (i + beatN(T)) % 3 === 0;
+      if (lit) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = tw ? .55 : .9;
+        ctx.drawImage(GL[c], x - (tw ? 22 : 30), y + 5 - (tw ? 22 : 30), tw ? 44 : 60, tw ? 44 : 60); ctx.restore(); }
+      ctx.save(); if (!lit) ctx.filter = 'brightness(0.6) saturate(0.6)';
+      place(off[c], x, y, (mulberry32(bf * 7 + i)() - .5) * .2, .4); ctx.restore();
+    });
+    ctx.restore();
+  } });
+}
+// באנר "סוכת שלום" על הקורה הקדמית
+function banner(at, st) {
+  const ribbon = sprite([P([[450, 346], [830, 346], [820, 372], [830, 398], [450, 398], [460, 372]], '#d9483b', { amp: .8 }),
+                          P([rect(460, 352, 360, 2.5), rect(460, 391, 360, 2.5)], '#f4a08f', { detail: true, amp: .3 })]);
+  const rp = add({ spr: ribbon, px: 640, py: 372, at, noShift: true, anim: st ? 'none' : 'unrollX', n: 4, shift: SHIFT, stretch: st, bbw: { h: 0 } });
+  rp.roll = sprite([P(rect(-8, -30, 16, 60), '#b83a2e', { amp: .6 })]);
+  layoutLine('סוכת שלום', 44, 3).forEach(({ ch, x }, i) => {
+    const xx = x - 640 + 520 + 120, s = letterSprites(ch, xx, 373, 44, '#fff4dc', null);
+    add({ spr: s.front, back: s.back, px: xx, py: 373, at: st ? at : at + .5 + i * .1, noShift: true, anim: st ? 'none' : 'flip', n: 3,
+          shift: SHIFT, stretch: st, rot0: rnd(-.06, .06), depth: .6, jit: .7, bbw: { h: 0 } });
+  });
+}
+// יונת נייר עם ענף זית
+const DOVE = (() => {
+  const body = open => sprite([
+    P([[-34, 0], [-10, -12], [18, -10], [34, -2], [18, 8], [-8, 10]], '#fbf8f0', { amp: .6, step: 8 }),
+    P(ell(26, -8, 9, 8), '#fbf8f0', { amp: .5 }), P([[34, -8], [44, -5], [34, -3]], '#f2b134', { amp: .3, step: 6 }),
+    P(ell(28, -10, 1.6, 1.6, 0, 6), '#2b1d14', { detail: true, amp: .1 }),
+    P(open ? [[-6, -6], [8, -44], [16, -36], [10, -4]] : [[-6, -2], [10, 26], [18, 20], [10, 0]], '#e9e4d6', { amp: .5, step: 8 }),
+    P([[-34, 0], [-50, -10], [-48, 8]], '#e9e4d6', { amp: .4, step: 8 }),
+    P([rect(40, -6, 16, 2)], '#5a8f2e', { amp: .2 }), P([ell(50, -10, 5, 2.4, -.5), ell(54, -2, 5, 2.4, .5)], '#6aa840', { detail: true, amp: .2 })]);
+  return [body(true), body(false)];
+})();
+function dove(t0, t1, x0, y0, x1, y1, perchUntil = 1e9, hop = 60) {
+  add({ at: t0, noShift: true, draw(cf, bf) {
+    const T = cf / FPS; if (T > perchUntil) return;
+    const l = clamp((T - t0) / (t1 - t0), 0, 1), x = x0 + (x1 - x0) * l, y = y0 + (y1 - y0) * l - Math.sin(Math.PI * l) * hop;
+    const flying = l < 1, spr = flying ? DOVE[bf % 2] : DOVE[1];
+    ctx.save(); ctx.translate(x, y); if (x1 < x0) ctx.scale(-1, 1); place(spr, 0, 0, flying ? (mulberry32(bf)() - .5) * .15 : 0, .6); ctx.restore();
+  } });
+}
+// כוכב נוצץ וניצוצות
+const STAR = sprite([P((() => { const p = []; for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? 22 : 54; p.push([Math.cos(a) * r, Math.sin(a) * r]); } return p; })(), '#ffd84a', { amp: .8, step: 10 }),
+                     P((() => { const p = []; for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? 11 : 28; p.push([Math.cos(a) * r, Math.sin(a) * r]); } return p; })(), '#fff6c8', { detail: true, amp: .4, step: 8 })]);
+const SPARK = sprite([P([[0, -22], [5, -5], [22, 0], [5, 5], [0, 22], [-5, 5], [-22, 0], [-5, -5]], '#fffbe6', { amp: .4, step: 8 })]);
+function sparkle(x, y, at, until, s = 1, spin = true) {
+  add({ at, until, noShift: true, draw(cf, bf) {
+    const kk = cf - appearF(at), sc = s * (kk < 3 ? [.3, 1.3, .9][kk] : (bf % 3 === 0 ? .75 : 1));
+    ctx.save(); ctx.translate(x, y); ctx.rotate(spin ? bf * .3 : 0); ctx.scale(sc, sc); ctx.globalCompositeOperation = 'lighter'; place(SPARK, 0, 0, 0, 0); ctx.restore();
+  } });
+}
+// לולב, הדסים, ערבה
+function lulavPaths(x, yb, h) {
+  const leaves = [];
+  for (let i = 0; i < 7; i++) { const dx = (i - 3) * 3.2; leaves.push([[x + dx - 2.5, yb], [x + dx * 2.2 + rnd(-3, 3), yb - h + rnd(-10, 10)], [x + dx + 2.5, yb]]); }
+  return [P(leaves, '#8fb04a', { amp: .5, step: 14 }), P(rect(x - 3, yb - h + 40, 6, h - 40), '#6f8f35', { detail: true, amp: .4, step: 20 })];
+}
+function sprigPaths(x, yb, h, lean, leafCol, leaf) {
+  const stem = [[x - 1.5, yb], [x + lean - 1, yb - h], [x + lean + 1, yb - h], [x + 1.5, yb]], L = [];
+  for (let u = .15; u < .95; u += leaf === 'myrtle' ? .09 : .12) {
+    const cx = x + lean * u, cy = yb - h * u;
+    if (leaf === 'myrtle') { L.push(ell(cx - 6, cy, 6.5, 3.6, -.4), ell(cx + 6, cy, 6.5, 3.6, .4), ell(cx, cy - 5, 6, 3.4, 1.4)); }
+    else { L.push(ell(cx - 12, cy + 6, 16, 2.6, -1.1), ell(cx + 12, cy + 6, 16, 2.6, 1.1)); }
+  }
+  return [P(stem, '#6b4a2b', { amp: .3, step: 20 }), P(L, leafCol, { amp: .4, step: 8 })];
+}
+
+const ease = x => .5 - .5 * Math.cos(Math.PI * clamp(x, 0, 1));
+const easeIn = x => x * x * x;
+function tsh(b, x, y, a) { ctx.shadowBlur = b * DPR; ctx.shadowOffsetX = x * DPR; ctx.shadowOffsetY = y * DPR; ctx.shadowColor = `rgba(30,16,4,${a})`; }
+const tnosh = () => tsh(0, 0, 0, 0);
+function part(img, sx, sy, sw, sh_, dx, dy, dw, dh) { const k = img.width / W; ctx.drawImage(img, sx * k, sy * k, sw * k, sh_ * k, dx, dy, dw, dh); }
+function full(img, bf, seed = 0) { const r = mulberry32(bf * 131 + seed); ctx.save(); ctx.translate(640 + (r() - .5) * 2, 360 + (r() - .5) * 2); ctx.scale(1.006, 1.006); ctx.drawImage(img, -640, -360, W, H); ctx.restore(); }
+const table = () => { ctx.fillStyle = '#3a2a1c'; ctx.fillRect(0, 0, W, H); };
+const pathOf = pts => { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); };
+
+// 1. דף מתהפך כמו בספר
+function pageTurn(A, B, l, bf) {
+  full(B, bf, 2);
+  const lift = 1 + .06 * Math.sin(Math.PI * l), ph = H * lift, py = (H - ph) / 2;
+  part(A, 0, 0, 640, H, 0, 0, 640, H);                              // החצי השמאלי של A נשאר
+  if (l < .5) {
+    const w = 640 * Math.cos(Math.PI * l);
+    ctx.save(); tsh(24, 10, 10, .5); part(A, 640, 0, 640, H, 640, py, w, ph); ctx.restore();
+    ctx.fillStyle = `rgba(20,10,0,${(.5 * (1 - w / 640)).toFixed(3)})`; ctx.fillRect(640, py, w, ph);
+  } else {
+    const w = 640 * -Math.cos(Math.PI * l);
+    ctx.save(); tsh(24, -10, 10, .5); part(B, 0, 0, 640, H, 640 - w, py, w, ph); ctx.restore();
+    ctx.fillStyle = `rgba(20,10,0,${(.5 * (1 - w / 640)).toFixed(3)})`; ctx.fillRect(640 - w, py, w, ph);
+  }
+  const g = ctx.createLinearGradient(610, 0, 670, 0);                // קו הקיפול
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(.5, 'rgba(0,0,0,.22)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.fillRect(610, 0, 60, H);
+}
+
+// 2. קימוט לכדור נייר שמתגלגל החוצה
+const MESH = (() => {
+  const NX = 14, NY = 8, C = [640, 380], RB = 120, v = [], t = [];
+  for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
+    const x = i * W / NX, y = j * H / NY, d = Math.hypot(x - C[0], y - C[1]), a = Math.atan2(y - C[1], x - C[0]) + rnd(-.6, .6);
+    const rr = RB * Math.min(1, .35 + .75 * d / 700) * rnd(.7, 1.05);
+    v.push({ x, y, tx: C[0] + Math.cos(a) * rr, ty: C[1] + Math.sin(a) * rr, nx: rnd(-1, 1), ny: rnd(-1, 1) });
+  }
+  const id = (i, j) => j * (NX + 1) + i;
+  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+    t.push({ v: [id(i, j), id(i + 1, j), id(i + 1, j + 1)], s: rnd(-.35, .4), z: R() });
+    t.push({ v: [id(i, j), id(i + 1, j + 1), id(i, j + 1)], s: rnd(-.35, .4), z: R() });
+  }
+  t.sort((a, b) => a.z - b.z);
+  return { v, t, C, RB };
+})();
+function triImg(img, s, d) {                                       // מיפוי משולש מהתמונה למשולש יעד
+  const k = img.width / W, [[x0, y0], [x1, y1], [x2, y2]] = s.map(([x, y]) => [x * k, y * k]), [[u0, v0], [u1, v1], [u2, v2]] = d;
+  const cx = (u0 + u1 + u2) / 3, cy = (v0 + v1 + v2) / 3, ex = p => [p[0] + (p[0] - cx) * .04 + Math.sign(p[0] - cx) * .6, p[1] + (p[1] - cy) * .04 + Math.sign(p[1] - cy) * .6];
+  ctx.save(); ctx.beginPath(); d.map(ex).forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.clip();
+  const den = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+  const a = ((u1 - u0) * (y2 - y0) - (u2 - u0) * (y1 - y0)) / den, b = ((u2 - u0) * (x1 - x0) - (u1 - u0) * (x2 - x0)) / den;
+  const c = ((v1 - v0) * (y2 - y0) - (v2 - v0) * (y1 - y0)) / den, e = ((v2 - v0) * (x1 - x0) - (v1 - v0) * (x2 - x0)) / den;
+  ctx.transform(a, c, b, e, u0 - a * x0 - b * y0, v0 - c * x0 - e * y0);
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
+}
+function crumple(A, B, l, bf) {
+  full(B, bf, 2);
+  // שלב 1: הדף מתקמט לכדור. שלב 2: הכדור נופל, קופץ כמה פעמים ומתגלגל החוצה
+  const c = ease(l / .36), m = clamp((l - .36) / .64, 0, 1), { v, t, C, RB } = MESH;
+  const FLOOR = 560, bx = 640 - Math.pow(m, 1.15) * 1000;
+  const bounce = Math.abs(Math.cos(Math.PI * m * 3.2)), h = (FLOOR - C[1]) * Math.exp(-2.4 * m) * bounce;
+  const by = C[1] + (FLOOR - C[1]) * (m > 0 ? 1 : 0) - (m > 0 ? h : 0);
+  const squash = m > 0 && h < 14 ? .88 : 1, rot = -(640 - bx) / RB;           // נמעך קצת כשהוא פוגע ברצפה
+  const cr = Math.sin(c * Math.PI) * 22, cs = Math.cos(rot), sn = Math.sin(rot);
+  const P = v.map(p => {
+    const x = p.x + (p.tx - p.x) * c + p.nx * cr, y = p.y + (p.ty - p.y) * c + p.ny * cr;
+    const dx = x - C[0], dy = y - C[1], rx = dx * cs - dy * sn, ry = dx * sn + dy * cs;
+    return [bx + rx * (2 - squash), by + ry * squash + RB * (1 - squash)];
+  });
+  if (c > .3) {                                                                  // צל על הרצפה
+    const hh = m > 0 ? h : FLOOR - C[1], k = 1 - hh / 400;
+    ctx.fillStyle = `rgba(20,10,0,${(.34 * c * k).toFixed(2)})`; ctx.beginPath();
+    ctx.ellipse(bx + 16, FLOOR + RB - 6, RB * (.7 + .3 * k) + (1 - c) * 300, 14, 0, 0, 7); ctx.fill();
+  }
+  for (const tr of t) {
+    const d = tr.v.map(i => P[i]);
+    triImg(A, tr.v.map(i => [v[i].x, v[i].y]), d);
+    const a = Math.abs(tr.s) * c;
+    if (a > .01) { ctx.fillStyle = tr.s > 0 ? `rgba(30,15,0,${a.toFixed(3)})` : `rgba(255,250,235,${(a * .8).toFixed(3)})`;
+      ctx.beginPath(); d.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.fill(); }
+  }
+}
+
+// 4. גלילה למעלה כמו מגילה
+function rollUp(A, B, l, bf) {
+  full(B, bf, 2);
+  const y = H + 30 - (H + 110) * ease(l);
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, Math.max(0, y)); ctx.clip(); full(A, bf, 1); ctx.restore();
+  ctx.save(); tsh(20, 0, 14, .55);
+  ctx.fillStyle = '#b88c62'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(-30, y - 28, W + 60, 56, 28) : ctx.rect(-30, y - 28, W + 60, 56); ctx.fill(); tnosh();
+  ctx.fillStyle = '#dcb68d'; ctx.fillRect(-30, y - 18, W + 60, 7); ctx.fillStyle = '#8a6340'; ctx.fillRect(-30, y + 13, W + 60, 8);
+  ctx.restore();
+}
+
+// 12. מטוס נייר: הסצנה מתכווצת לדף, מתקפלת למטוס ועפה
+const PLANE = (() => {
+  const NX = 10, NY = 6, v = [], t = [];
+  for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) v.push({ u: i / NX, w: j / NY });
+  const id = (i, j) => j * (NX + 1) + i;
+  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+    t.push({ v: [id(i, j), id(i + 1, j), id(i + 1, j + 1)], top: j < NY / 2 });
+    t.push({ v: [id(i, j), id(i + 1, j + 1), id(i, j + 1)], top: j < NY / 2 });
+  }
+  return { v, t, NX, NY };
+})();
+function planePath(g) {                                             // מסלול הטיסה: קשת למעלה ושמאלה
+  return { x: -Math.pow(g, 1.25) * 1250, y: -g * 330 + 120 * Math.sin(g * Math.PI * 1.4) * (1 - g), s: 1 - .5 * g };
+}
+function plane(A, B, l, bf) {
+  full(B, bf, 2);
+  const a = ease(l / .2), f = ease((l - .2) / .3), g = clamp((l - .5) / .5, 0, 1);
+  const s = 1 - .5 * a, tilt = -.05 * a, cs = Math.cos(tilt), sn = Math.sin(tilt);
+  const L = 520, Wm = 170, Nx = 640 - L * .55, CX = Nx + L * .6;
+  const fp = planePath(g), fp2 = planePath(Math.min(1, g + .02));
+  const heading = g > 0 ? Math.atan2(fp.y - fp2.y, fp.x - fp2.x) : 0;              // האף (שפונה שמאלה) פונה לכיוון הטיסה
+  const hc = Math.cos(heading * .6), hs = Math.sin(heading * .6);
+  const P = PLANE.v.map(({ u, w }) => {
+    let x = (u - .5) * W * s, y = (w - .5) * H * s;                 // דף מוקטן
+    [x, y] = [x * cs - y * sn, x * sn + y * cs];
+    const px = Nx + u * L - CX, py = (w - .5) * 2 * u * Wm * (1 - .15 * Math.abs(w - .5));   // צורת מטוס
+    x = x + (px - x) * f; y = y + (py - y) * f;
+    const rx = (x * hc - y * hs) * fp.s, ry = (x * hs + y * hc) * fp.s;
+    return [CX + rx + fp.x, 360 + ry + fp.y];
+  });
+  if (g > 0) {                                                        // שובל של פסי נייר קטנים
+    ctx.save(); tsh(4, 1, 2, .35);
+    for (let k = 1; k <= 7; k++) {
+      const gg = g - k * .045; if (gg <= 0) break;
+      const q = planePath(gg), qx = CX + q.x + (L * .45) * q.s, qy = 360 + q.y;
+      ctx.fillStyle = `rgba(255,250,235,${(.9 - k * .1).toFixed(2)})`;
+      ctx.save(); ctx.translate(qx, qy); ctx.rotate(heading); ctx.fillRect(-9, -2, 18, 4); ctx.restore();
+    }
+    ctx.restore();
+  }
+  const corners = [0, PLANE.NX, PLANE.v.length - 1, PLANE.v.length - 1 - PLANE.NX].map(i => P[i]);
+  ctx.save(); ctx.filter = 'blur(8px)'; ctx.fillStyle = `rgba(20,10,0,${(.25 + .1 * a).toFixed(2)})`;   // צל
+  ctx.translate(18 + 20 * a, 26 + 30 * a); pathOf(corners); ctx.fill(); ctx.restore();
+  for (const tr of PLANE.t) {
+    const d = tr.v.map(i => P[i]);
+    triImg(A, tr.v.map(i => [PLANE.v[i].u * W, PLANE.v[i].w * H]), d);
+    const shade = f * (tr.top ? .05 : .28);
+    if (shade > .01) { ctx.fillStyle = tr.top ? `rgba(255,250,235,${shade.toFixed(3)})` : `rgba(20,10,0,${shade.toFixed(3)})`; pathOf(d); ctx.fill(); }
+  }
+  if (f > .5) {                                                       // קו הקיפול באמצע
+    const mid = PLANE.NY / 2 * (PLANE.NX + 1);
+    ctx.strokeStyle = `rgba(40,20,5,${(.5 * (f - .5) * 2).toFixed(2)})`; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(...P[mid]); ctx.lineTo(...P[mid + PLANE.NX]); ctx.stroke();
+  }
+}
+
+
+
+// ============================================================
+//  הדמויות
+// ============================================================
+function buildAll() {
+const shlomit = makeKid({ seed: 1, scale: 1, skin: '#f3c29b', hairCol: '#6b3a1f', hair: 'braids', bow: '#e3343f', dress: true, top: '#ef6a36', legs: '#f3c29b', shoe: '#3a2a4a' });
+const boy = makeKid({ seed: 2, scale: .95, skin: '#e8b48a', hairCol: '#2d1f16', hair: 'short', kippah: '#2f6db5', top: '#f2b134', stripe: '#2f86d6', legs: '#3d4f6b', shoe: '#6b3a1f' });
+const girl = makeKid({ seed: 3, scale: .92, skin: '#f6d0ae', hairCol: '#d99a2b', hair: 'pony', bow: '#8e55b8', dress: true, top: '#6dbb4c', legs: '#f6d0ae', shoe: '#b0303a' });
+const mom = makeKid({ seed: 4, scale: 1.22, skin: '#e9b98f', hairCol: '#3a2418', hair: 'pony', bow: '#2f86d6', dress: true, top: '#8e55b8', legs: '#e9b98f', shoe: '#2b2b3a' });
+const dad = makeKid({ seed: 5, scale: 1.3, skin: '#d9a47c', hairCol: '#2a1c14', hair: 'short', kippah: '#fffaf0', top: '#fffaf0', stripe: '#9fc2e8', legs: '#4a4a58', shoe: '#2b2b3a' });
+const people = [['#e3343f', '#f3c29b', '#2d1f16'], ['#2f86d6', '#e0a878', '#6b3a1f'], ['#f2b134', '#f6d0ae', '#d99a2b'], ['#4caf50', '#c98a60', '#1e1410'],
+  ['#ef7a36', '#f3c29b', '#3a2418'], ['#8e55b8', '#e9b98f', '#6b3a1f'], ['#1f9e9e', '#f6d0ae', '#2d1f16'], ['#d9483b', '#d9a47c', '#b9b0a0'],
+  ['#6ab8ff', '#f3c29b', '#6b3a1f'], ['#e8612f', '#e0a878', '#2a1c14']].map(([t, s, h], i) => makePerson(900 + i, t, s, h));
+
+// ============================================================
+//  סצנה 0: כרטיס פתיחה (0:00–0:08)
+// ============================================================
+scene('title', 0); TSHIFT = 0;
+{
+  const dashes = [];
+  for (let x = 40; x < W - 50; x += 26) dashes.push(rect(x, 30, 14, 4), rect(x + 6, H - 34, 14, 4));
+  for (let y = 44; y < H - 50; y += 26) dashes.push(rect(30, y, 4, 14), rect(W - 34, y + 6, 4, 14));
+  piece([P(rect(0, 0, W, H), '#c9a071', { raw: true, edge: false }), P(dashes, '#f4e6c8', { detail: true, amp: .4, step: 8 })], { depth: 0, jit: 0, rot0: 0 });
+}
+[[170, 120, 320, -.55, [-420, -260], .2], [1110, 120, 320, .55, [420, -260], .5], [150, 610, 300, .5, [-420, 260], .8], [1130, 610, 300, -.5, [420, 260], 1.1]]
+  .forEach(([x, y, len, ang, from, at], i) => piece(frondPaths(x, y, len, ang, ['#4f9d3a', '#5fb043', '#3f8a34', '#74b94a'][i]), { at, anim: 'tumble', n: 5, from, turns: i % 2 ? -.6 : .6 }));
+piece([P(ell(300, 600, 34), '#c62839', { amp: 1.2 }), P([[286, 570], [292, 556], [298, 568], [304, 554], [310, 568], [316, 558], [316, 574], [286, 574]], '#9e1b2b', { detail: true, amp: .5, step: 8 }),
+       P(ell(290, 590, 9, 13, .5), '#ef6a78', { detail: true, amp: .4 })], { at: 3.4, anim: 'drop', n: 3, dist: 260, spin: .6 });
+piece([P(ell(985, 598, 26, 36, .5), '#f2d024', { amp: 1.8, step: 8 }), P(rect(1000, 560, 6, 14), '#5a8f2e', { detail: true, amp: .4 }),
+       P(ell(1012, 560, 16, 7, -.4), '#4caf50', { detail: true, amp: .6 })], { at: 3.7, anim: 'drop', n: 3, dist: 260, spin: -.6 });
+function star5(cx, cy, r, col) { const p = []; for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * .45 : r; p.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]); } return [P(p, col, { amp: .6, step: 8 })]; }
+[[330, 140, 22, '#f2b134', 4.0], [955, 150, 18, '#fffaf0', 4.3], [230, 330, 14, '#fffaf0', 4.6], [1060, 320, 20, '#f2b134', 4.9], [640, 560, 16, '#fffaf0', 5.2]]
+  .forEach(([x, y, r, c, at]) => piece(star5(x, y, r, c), { at, anim: 'pop', rot0: rnd(-.4, .4) }));
+piece([P([[250, 392], [345, 392], [345, 492], [250, 492], [282, 442]], '#a8322a'), P([[1030, 392], [935, 392], [935, 492], [1030, 492], [998, 442]], '#a8322a')], { at: 2.2, anim: 'pop' });
+{
+  const band = piece([P(rect(330, 370, 620, 104), '#d9483b'), P([rect(330, 380, 620, 3), rect(330, 461, 620, 3)], '#f4a08f', { detail: true, amp: .5 })], { at: 1.8, anim: 'unrollX', n: 4 });
+  band.roll = sprite([P(rect(-12, -58, 24, 116), '#b83a2e', { amp: .8 }), P(rect(-5, -58, 4, 116), 'rgba(255,255,255,.35)', { detail: true, amp: .3 })]);
+}
+layoutLine('שלומית', 150, 6).forEach(({ ch, x }, i) => {
+  const s = letterSprites(ch, x, 250, 150, PAPER[i % PAPER.length], '#fffaf0');
+  add({ spr: s.front, back: s.back, px: x, py: 250, at: .6 + i * SONG.BEAT / 2, anim: 'flip', n: 3, rot0: rnd(-.09, .09), jit: .9, bbw: { h: 0 } });
+});
+layoutLine('בונה סוכה', 84, 4).forEach(({ ch, x }, i) => {
+  const s = letterSprites(ch, x, 420, 84, '#fff4dc', null);
+  add({ spr: s.front, px: x, py: 420, at: 2.3 + i * .09, anim: 'roll', n: 5, from: [560, 0], radius: 42, rot0: rnd(-.07, .07), depth: .8, jit: .8, bbw: { h: 0 } });
+});
+{ // קרדיט
+  const rb = sprite([P([[470, 548], [810, 548], [796, 574], [810, 600], [470, 600], [484, 574]], '#fff4dc', { amp: .8 })],
+    { after: g => { g.font = font(28); g.textAlign = 'center'; g.textBaseline = 'middle'; g.direction = 'rtl'; g.fillStyle = '#7a4826'; g.fillText('מילים ולחן: נעמי שמר', 640, 575); } });
+  add({ spr: rb, px: 640, py: 574, at: 5.0, anim: 'slide', from: [0, 160], rot0: .01, bbw: { h: 0 } });
+}
+
+// ============================================================
+//  סצנה 1: בונים את הסוכה (0:07–1:05) — בית ראשון
+// ============================================================
+scene('build', 7.0);
+TSHIFT = 3.0; landscape(); TSHIFT = 0;
+{ // שלט "כאן תהיה סוכה!"
+  const sg = sprite([P(rect(513, 520, 14, 104), C.woodD, { amp: .8 }), P(rect(398, 462, 244, 76), C.woodL, { amp: 1.2 }),
+                     P([ell(410, 474, 3.5, 3.5, 0, 6), ell(630, 474, 3.5, 3.5, 0, 6)], '#6b6f75', { detail: true, amp: .2 })],
+    { after: g => { g.font = font(34); g.textAlign = 'center'; g.textBaseline = 'middle'; g.direction = 'rtl'; sh(g, 1.5, .8, 1, 'rgba(40,24,10,.35)');
+                    g.fillStyle = '#5a2e14'; g.fillText('כאן תהיה סוכה!', 520, 502); sh(g, 0, 0, 0, 'rgba(0,0,0,0)'); } });
+  add({ spr: sg, px: 520, py: 624, at: 11.0, until: 20.6, exit: 'fall', anim: 'rise', base: 628, bbw: { h: 170 } });
+}
+const B1 = i => snap(L(1, i));
+sukkah({
+  floor: snap(L(1, 1, .05)), postB1: snap(L(1, 1, .3)), postB2: snap(L(1, 1, .55)), beamB: snap(L(1, 1, .8)),
+  postF1: snap(L(1, 2, .05)), postF2: snap(L(1, 2, .3)), beamS: snap(L(1, 2, .55)), beamF: snap(L(1, 2, .8)),
+  wallB: snap(L(1, 3, .05)), wallL: snap(L(1, 3, .4)), wallR: snap(L(1, 3, .7)),
+  lights: snap(L(1, 2, .95)), lit: B1(5),
+  fronds: [...Array(9)].map((_, i) => snap(L(1, 4, .05) + i * 2 * SONG.BEAT)).concat([snap(L(1, 5, .2)), snap(L(1, 5, .4)), snap(L(1, 5, .6))]),
+  banner: snap(L(1, 6, .05)),
+});
+piece([P(rect(1000, 652, 128, 11), C.wood), P(rect(1008, 641, 118, 11), C.woodL), P(rect(996, 663, 134, 11), C.woodD),
+       P([rect(1020, 656, 40, 1.3), rect(1070, 645, 36, 1.3), rect(1030, 667, 50, 1.3)], '#6a3c1e', { detail: true, amp: .2, step: 20 })],
+      { at: 19.3, until: L(1, 4), exit: 'fall', anim: 'tumble', from: [60, -140], turns: .5 });
+piece([P([[1150, 636], [1224, 636], [1224, 628], [1150, 628]], '#b9bec4', { amp: .5, step: 10 }),
+       P([[1160, 630], [1236, 612], [1238, 620], [1162, 636]], '#aeb4ba', { amp: .4, step: 8 }), P(rect(1226, 606, 18, 12), C.woodL, { amp: .4 }),
+       P(rect(1144, 638, 88, 34), '#c8453a', { amp: .8, step: 12 }), P(rect(1144, 646, 88, 4), '#e8735f', { detail: true, amp: .3 }),
+       P([rect(1176, 624, 24, 5), rect(1174, 624, 5, 16), rect(1197, 624, 5, 16)], '#3a3a44', { amp: .3 })], { at: 19.7, anim: 'drop', dist: 200, spin: -.4 });
+kid(shlomit, 670, [
+  { from: 13.4, to: 19.2, pose: 'carry', walk: true, x0: 1420, x1: 860 },
+  { from: 19.2, to: 21.0, pose: 'stand', x0: 860 },
+  { from: 21.0, to: 22.1, pose: 'present' },
+  { from: 22.1, to: L(1, 4), pose: 'hammer' },
+  { from: L(1, 4), to: L(1, 5, .7), pose: 'lift' },
+  { from: L(1, 5, .7), to: L(1, 6), pose: 'cheer' },
+  { from: L(1, 6), to: 999, pose: 'present' },
+]);
+dove(L(1, 6, .35), L(1, 6, .75), 1400, 120, 560, 232, 999, 40);
+TSHIFT = 3.0; foreground(); TSHIFT = 0;
+SC.cam = [[0, 1, 640, 360], [8.6, 1, 640, 360], [10.2, 1.6, 540, 470], [12.8, 1.6, 540, 470], [14.2, 1.85, T => segX(shlomit.segs, T).x, 520],
+  [19.0, 1.85, T => segX(shlomit.segs, T).x, 520], [20.6, 1.4, 690, 470], [L(1, 3, .6), 1.4, 690, 470], [L(1, 4), 1.05, 650, 380],
+  [L(1, 5, .8), 1.05, 650, 380], [L(1, 6), 1.5, 560, 380], [999, 1.5, 560, 380]];
+
+// ============================================================
+//  סצנה 2: בתוך הסוכה — ארבעת המינים ופירות הסתיו (1:03–1:47) — בית שני
+// ============================================================
+scene('decor', 63.0);
+{
+  // נוף הבוסתן שנראה מבעד לחלון (מאחורי הקיר)
+  piece([P(rect(60, 110, 360, 280), '#9fd3e3', { raw: true, edge: false })], { depth: 0, jit: 0, rot0: 0 });
+  const orch = [];
+  piece([P([[60, 300], [140, 270], [240, 285], [330, 262], [420, 280], [420, 400], [60, 400]], '#9ccd82', { amp: 1.2 })], { depth: .3 });
+  for (let i = 0; i < 6; i++) {
+    const x = 90 + i * 58, y = 300 + (i % 2) * 18;
+    piece([P(rect(x - 3, y - 6, 6, 22), C.woodD, { amp: .4 }), P(ell(x, y - 18, 22, 20), i % 2 ? '#5fa848' : '#4f9d3a', { amp: .8 }),
+           P([ell(x - 8, y - 20, 4), ell(x + 7, y - 12, 4), ell(x + 2, y - 28, 3.5)], ['#e3343f', '#ef7a36', '#f2d024'][i % 3], { detail: true, amp: .3 })],
+          { depth: .5, jit: .6 });
+  }
+  // קיר הבד האחורי עם חור לחלון
+  const wallP = P([rect(-60, -40, W + 120, 700), [[60, 110], [60, 390], [420, 390], [420, 110]]], C.wall, { rule: 'evenodd', amp: 1 });
+  const stripes = [];
+  for (let x = 480; x < W + 40; x += 150) stripes.push(rect(x, -40, 12, 700));
+  piece([wallP, P(stripes, '#9fc2e8', { detail: true, amp: .8 }), P(rect(-60, 470, W + 120, 14), C.red, { detail: true, amp: 1 })], { depth: .4, jit: .4, rot0: 0 });
+  piece([P([rect(46, 96, 388, 16), rect(46, 388, 388, 16), rect(46, 96, 16, 308), rect(418, 96, 16, 308)], C.woodL, { amp: .8 }),
+         P(rect(236, 110, 8, 280), C.woodL, { amp: .6 })], { depth: .8 });
+  // תריסי נייר שנפתחים
+  const shutter = (x0, dir) => add({ at: 63.0, noShift: true, spr: sprite([P(rect(x0, 112, 176, 276), '#e8d7b0', { amp: .8 }),
+      P([rect(x0 + 20, 150, 136, 6), rect(x0 + 20, 210, 136, 6), rect(x0 + 20, 270, 136, 6), rect(x0 + 20, 330, 136, 6)], '#cdb88c', { detail: true, amp: .4 })]),
+    draw(cf, bf) {
+      const T = cf / FPS, open = clamp((cf - appearF(snap(L(2, 6, .05)))) / 4, 0, 1), sx = Math.cos(open * Math.PI * .5);
+      if (sx < .03) return;
+      const hx = dir < 0 ? 62 : 418;
+      ctx.save(); ctx.translate(hx, 0); ctx.scale(sx, 1); ctx.translate(-hx, 0); place(this.spr, 0, 0, 0, .6);
+      if (open > 0) { ctx.fillStyle = `rgba(30,15,0,${(.3 * open).toFixed(2)})`; ctx.fillRect(x0, 112, 176, 276); }
+      ctx.restore();
+    } });
+  shutter(62, -1); shutter(242, 1);
+  // סכך מלמעלה ונורות
+  const cols = ['#3f8a34', '#4f9d3a', '#5fb043', '#46913a'];
+  for (let i = 0; i < 7; i++) piece(frondPaths(-40 + i * 220, 18 + (i % 2) * 22, 360, rnd(-.12, .12), cols[i % 4]), { depth: .9, jit: .6, k: 1.05 });
+  add({ at: 0, noShift: true, draw(cf, bf) {                      // נורות דולקות לאורך הסכך
+    const T = cf / FPS;
+    for (let i = 0; i < 12; i++) {
+      const x = 40 + i * 110, y = 70 + 16 * Math.sin(i * 1.3), c = ['#ffd24a', '#ff8a3d', '#ff5a5f', '#7fd46b', '#6ab8ff'][i % 5], tw = (i + beatN(T)) % 3 === 0;
+      const g = ctx.createRadialGradient(x, y, 1, x, y, tw ? 20 : 28); g.addColorStop(0, c); g.addColorStop(1, c + '00');
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = .8; ctx.fillStyle = g; ctx.fillRect(x - 30, y - 30, 60, 60); ctx.restore();
+      ctx.fillStyle = c; ctx.beginPath(); ctx.ellipse(x, y, 5, 7, 0, 0, 7); ctx.fill();
+    }
+  } });
+  // רצפה ושולחן
+  piece([P(rect(-60, 600, W + 120, 180), '#d9a766', { amp: 1 }), P([rect(-60, 640, W + 120, 3), rect(-60, 690, W + 120, 3)], '#b9864c', { detail: true, amp: .6 })], { depth: .6, jit: .4, rot0: 0 });
+  piece([P([rect(170, 470, 760, 14), rect(200, 484, 14, 150), rect(886, 484, 14, 150)], C.woodD, { amp: .8 })], { depth: 1 });
+  {
+    const pts = [[164, 462], [936, 462], [950, 510]];
+    for (let cx = 950 - 16; cx > 150; cx -= 32) for (let a = 0; a <= Math.PI; a += Math.PI / 5) pts.push([cx + 16 * Math.cos(a), 510 + 10 * Math.sin(a)]);
+    pts.push([150, 510]);
+    piece([P(pts, '#ffffff', { amp: .8, step: 14 }), P([[156, 494], [944, 494], [946, 501], [154, 501]], '#7cc4fa', { detail: true, amp: .5 })], { depth: 1 });
+  }
+  // לולב והדסים, ערבה, אתרוג
+  piece([P([rect(470, 440, 36, 24), rect(476, 434, 24, 8)], '#b88c62', { amp: .6 })], { at: snap(L(2, 2, .02)), anim: 'pop' });
+  piece(lulavPaths(488, 446, 330), { at: snap(L(2, 2, .1)), anim: 'rise', base: 446, px: 488, py: 446 });
+  piece(sprigPaths(500, 446, 150, 30, '#2f6b2a', 'myrtle'), { at: snap(L(2, 2, .45)), anim: 'pop', px: 500, py: 446 });
+  piece(sprigPaths(478, 446, 140, -34, '#2f6b2a', 'myrtle'), { at: snap(L(2, 2, .65)), anim: 'pop', px: 478, py: 446 });
+  piece(sprigPaths(494, 446, 190, 46, '#8fbf5a', 'willow'), { at: snap(L(2, 3, .1)), anim: 'pop', px: 494, py: 446 });
+  piece(sprigPaths(482, 446, 180, -52, '#8fbf5a', 'willow'), { at: snap(L(2, 3, .35)), anim: 'pop', px: 482, py: 446 });
+  piece([P(rect(560, 430, 70, 34), '#fbe7a6', { amp: .6 }), P(rect(560, 430, 70, 8), '#e8cf7a', { detail: true, amp: .3 }),
+         P(ell(595, 424, 18, 24, .4), '#f2d024', { amp: 1.4, step: 7 }), P(rect(606, 398, 4, 8), '#5a8f2e', { detail: true, amp: .2 })], { at: snap(L(2, 3, .6)), anim: 'drop', dist: 200 });
+  // רימונים עם עלים, ופירות הסתיו תלויים
+  const hang = (x, len, at, paths) => piece([P(rect(x - .8, 0, 1.6, len + 2), '#6b4a2b', { raw: true, edge: false }), ...paths], { at, anim: 'drop', swing: true, px: x, py: 0, pad: 14, dist: 200 });
+  const pom = (x, top, r) => [P(ell(x, top + r, r), '#c62839', { amp: 1 }),
+    P([[x - r * .4, top + 2], [x - r * .25, top - 6], [x - .1 * r, top + 1], [x + .15 * r, top - 7], [x + .3 * r, top + 1], [x + .45 * r, top - 5], [x + .45 * r, top + 5], [x - r * .4, top + 5]], '#9e1b2b', { detail: true, amp: .4, step: 6 }),
+    P([ell(x - r - 6, top + 2, 13, 5, -.5), ell(x + r + 6, top + 4, 13, 5, .5)], '#4f9d3a', { detail: true, amp: .4 }),
+    P(ell(x - r * .35, top + r * .6, r * .22, r * .35, .5), '#ef6a78', { detail: true, amp: .3 })];
+  hang(700, 150, snap(L(2, 4, .05)), pom(700, 150, 26));
+  hang(610, 190, snap(L(2, 4, .4)), pom(610, 190, 20));
+  hang(790, 175, snap(L(2, 4, .65)), pom(790, 175, 22));
+  const grapes = (x, top) => { const g = []; [[-10, 8], [0, 8], [10, 8], [-5, 18], [5, 18], [-10, 28], [0, 28], [10, 28], [-5, 38], [5, 38], [0, 48]].forEach(([a, b]) => g.push(ell(x + a, top + b, 7)));
+    return [P(g, '#7b3f9e', { amp: .5, step: 6 }), P([[x, top], [x + 20, top - 8], [x + 12, top + 8]], '#4caf50', { detail: true, amp: .4, step: 6 })]; };
+  const fruit = (x, top, rx, ry, col, leaf = true) => [P(ell(x, top + ry, rx, ry), col, { amp: .9 }), P(rect(x - 2, top - 6, 4, 8), '#6b4a2b', { detail: true, amp: .2 }),
+    ...(leaf ? [P(ell(x + 10, top - 2, 10, 4, -.4), '#5fb043', { detail: true, amp: .3 })] : []), P(ell(x - rx * .35, top + ry * .6, rx * .25, ry * .3), 'rgba(255,255,255,.45)', { detail: true, amp: .2 })];
+  hang(880, 130, snap(L(2, 5, .05)), grapes(880, 130));
+  hang(540, 170, snap(L(2, 5, .2)), fruit(540, 170, 17, 18, '#d9303e'));
+  hang(960, 190, snap(L(2, 5, .35)), fruit(960, 190, 15, 22, '#b8c93a'));
+  hang(650, 120, snap(L(2, 5, .5)), fruit(650, 120, 17, 17, '#ef7a36'));
+  hang(750, 110, snap(L(2, 5, .65)), [P(ell(750, 128, 14, 18), '#7a4a6a', { amp: .8 }), P(rect(748, 104, 4, 8), '#6b4a2b', { detail: true, amp: .2 })]);
+  {
+    const bowl = []; for (let i = 0; i <= 12; i++) { const a = i / 12 * Math.PI; bowl.push([760 + 54 * Math.cos(a), 450 + 26 * Math.sin(a)]); }
+    piece([P(ell(732, 436, 16), '#ef7a36', { amp: .6 }), P(ell(764, 428, 18), '#d9303e', { amp: .6 }), P(ell(792, 440, 14), '#8cc43f', { amp: .6 }),
+           P([ell(748, 420, 6), ell(758, 414, 6), ell(768, 420, 6)], '#7b3f9e', { amp: .3 }), P([bowl, rect(742, 472, 36, 8)], C.blue, { amp: .7 }),
+           P(rect(706, 454, 108, 5), '#f2b134', { detail: true, amp: .4 })], { at: snap(L(2, 5, .8)), anim: 'pop', px: 760, py: 476 });
+  }
+  // ריח בוסתן: סלסלות נייר שמרחפות מהחלון
+  const curl = col => sprite([P((() => { const p = []; for (let a = 0; a <= Math.PI * 3.2; a += .25) p.push([Math.cos(a) * (6 + a * 4), Math.sin(a) * (6 + a * 4) * .7]);
+    for (let a = Math.PI * 3.2; a >= 0; a -= .25) p.push([Math.cos(a) * (2 + a * 4), Math.sin(a) * (2 + a * 4) * .7]); return p; })(), col, { amp: .3, step: 10 })]);
+  ['#f7a8c4', '#c9b3f0', '#fff0a8', '#b8e8c8', '#f7c8a8'].forEach((col, i) => {
+    const sp = curl(col), t0 = snap(L(2, 6, .15 + i * .1));
+    add({ at: t0, noShift: true, draw(cf, bf) {
+      const u = (cf / FPS - t0) / 5; if (u > 1) return;
+      const x = 240 + u * 820, y = 250 + i * 18 + 40 * Math.sin(u * 8 + i);
+      ctx.save(); ctx.globalAlpha = Math.min(1, (1 - u) * 3); place(sp, x, y, u * 6 + i, .5); ctx.restore();
+    } });
+  });
+  kid(shlomit, 700, [{ from: 60, to: L(2, 2), pose: 'finger', x0: 1080 }, { from: L(2, 2), to: L(2, 4), pose: 'present' },
+    { from: L(2, 4), to: L(2, 5), pose: 'wave' }, { from: L(2, 5), to: L(2, 6, .1), pose: 'cheer' }, { from: L(2, 6, .1), to: 999, pose: 'sniff' }], 1.45);
+  SC.cam = [[0, 1, 640, 360], [L(2, 1, .6), 1, 640, 360], [L(2, 2, .1), 1.3, 520, 330], [L(2, 3, .8), 1.3, 540, 350], [L(2, 4), 1.25, 700, 300],
+    [L(2, 4, .9), 1.25, 700, 300], [L(2, 5, .1), 1.05, 740, 330], [L(2, 5, .95), 1.05, 740, 330], [L(2, 6, .1), 1.35, 330, 300], [L(2, 6, .6), 1.1, 560, 330], [999, 1.1, 560, 330]];
+}
+
+// ============================================================
+//  סצנה 3: "הביטו, זה נגמר!" — השכנים באים (1:45–2:30) — בית שלישי
+// ============================================================
+scene('crowd', 105.4);
+TSHIFT = -200; landscape(); TSHIFT = 0;
+function insideDecor(at) {
+  sk([P([rect(518, 500, 244, 12), rect(534, 512, 10, 98), rect(736, 512, 10, 98)], C.woodD), P(rect(514, 494, 252, 30), '#ffffff', { amp: .8 })], { at, stretch: true });
+  const x = 528, top = 312 + 70;
+  hanging(x, 70, at, [P(ell(x, top + 17, 17), '#c62839', { amp: 1 })], { anim: 'none', stretch: true });
+  hanging(684, 74, at, [P(ell(684, 386 + 17, 12, 17, .15), '#f2d024', { amp: 1.4, step: 7 })], { anim: 'none', stretch: true });
+  const g = []; [[-9, 8], [0, 8], [9, 8], [-4.5, 17], [4.5, 17], [0, 26]].forEach(([a, b]) => g.push(ell(752 + a, 374 + b, 6)));
+  hanging(752, 62, at, [P(g, '#7b3f9e', { amp: .5, step: 6 })], { anim: 'none', stretch: true });
+  piece(lulavPaths(600, 494, 150), { at, shift: SHIFT, stretch: true });
+}
+const DONE = 100;
+sukkah({ floor: DONE, postB1: DONE, postB2: DONE, beamB: DONE, postF1: DONE, postF2: DONE, beamS: DONE, beamF: DONE, wallB: DONE, wallL: DONE, wallR: DONE,
+  lights: DONE, lit: DONE, fronds: [DONE], banner: DONE, inside: () => insideDecor(DONE) }, true);
+dove(DONE, DONE + .1, 560, 232, 560, 232);
+SC.stretch = T => [1, 1.1, 1.2, 1.3, 1.36][clamp(Math.floor((T - snap(L(3, 5, .45))) * FPS) + 1, 0, 4)];
+SC.shake = T => T > L(3, 3) && T < L(3, 3, .5) ? 4 : 1;
+{ // בועת דיבור
+  const bx = 860, by = 330;
+  const bs = sprite([P([ell(bx, by, 150, 56), [[bx - 30, by + 40], [bx + 10, by + 48], [bx - 10, by + 96]]], '#fffaf0', { amp: 1.2, step: 12 })],
+    { after: g => { g.font = font(46); g.textAlign = 'center'; g.textBaseline = 'middle'; g.direction = 'rtl'; sh(g, 2, 1, 1.5, 'rgba(40,24,10,.3)'); g.fillStyle = '#e3343f'; g.fillText('הביטו, זה נגמר!', bx, by + 2); } });
+  add({ spr: bs, px: bx - 10, py: by + 90, at: snap(L(3, 2, .05)), until: L(3, 3, .6), anim: 'pop', noShift: true, bbw: { h: 0 } });
+}
+for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2; sparkle(520 + Math.cos(a) * rnd(260, 420), 400 + Math.sin(a) * rnd(160, 260), snap(L(3, 3, .05) + i * SONG.BEAT / 2), L(3, 4, .3), rnd(.7, 1.4)); }
+kid(shlomit, 690, [{ from: 100, to: L(3, 2), pose: 'present', x0: 860 }, { from: L(3, 2), to: L(3, 3, .6), pose: 'cheer' },
+  { from: L(3, 3, .6), to: L(3, 6), pose: 'wave' }, { from: L(3, 6), to: 999, pose: 'cheer' }]);
+kid(boy, 684, [{ from: L(3, 4), to: L(3, 4, .8), pose: 'stand', walk: true, x0: 1400, x1: 1050 }, { from: L(3, 4, .8), to: L(3, 6), pose: 'wave' }, { from: L(3, 6), to: 999, pose: 'cheer', phase: 1 }]);
+kid(girl, 674, [{ from: L(3, 4, .2), to: L(3, 4, .95), pose: 'stand', walk: true, x0: 1440, x1: 1180 }, { from: L(3, 4, .95), to: L(3, 6), pose: 'stand' }, { from: L(3, 6), to: 999, pose: 'cheer' }]);
+kid(mom, 690, [{ from: L(3, 4, .1), to: L(3, 4, .9), pose: 'stand', walk: true, x0: -160, x1: 150 }, { from: L(3, 4, .9), to: L(3, 6), pose: 'stand' }, { from: L(3, 6), to: 999, pose: 'cheer', phase: 1 }]);
+kid(dad, 698, [{ from: L(3, 4, .3), to: L(3, 5), pose: 'stand', walk: true, x0: -200, x1: 70 }, { from: L(3, 5), to: L(3, 6), pose: 'wave' }, { from: L(3, 6), to: 999, pose: 'cheer' }]);
+people.forEach((p, i) => {                                          // ההמונים: שורה בתוך הסוכה שנמתחה
+  const x = 200 + i * 64 + (i % 2) * 10, y = 618 - (i % 2) * 10;
+  crowdMember(p, x, y, snap(L(3, 5, .55) + i * SONG.BEAT / 2), .78, L(3, 6));
+});
+TSHIFT = -200; foreground(); TSHIFT = 0;
+SC.cam = [[0, 1, 640, 360], [L(3, 1, .7), 1, 640, 360], [L(3, 2, .05), 1.55, 800, 420], [L(3, 3, .1), 1.55, 800, 420], [L(3, 3, .6), 1, 640, 360], [999, 1, 640, 360]];
+
+// ============================================================
+//  סצנה 4: לילה, כוכב מציץ מהסכך (2:27–סוף) — בית רביעי
+// ============================================================
+scene('night', 147.2, '#0e1430');
+TSHIFT = -300; landscape();
+SC.pieces = SC.pieces.filter(p => !(p.px === 1130 && p.py === 118));          // בלילה אין שמש
+add({ at: 0, noShift: true, k: .3, draw() { ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = '#34458a'; ctx.fillRect(-400, -300, W + 800, H + 600); ctx.restore(); } });
+{ // ירח וכוכבים קטנים
+  const moon = [...ell(0, 0, 46)], cut = ell(18, -10, 40);
+  piece([P([moon.map(([x, y]) => [x + 200, y + 110]), cut.map(([x, y]) => [x + 200, y + 110]).reverse()], '#fff2c2', { rule: 'evenodd', amp: .8 })], { at: 0, k: .2, depth: .5 });
+  const r = mulberry32(333);
+  for (let i = 0; i < 26; i++) { const x = r() * W, y = r() * 260, s = .25 + r() * .35;
+    add({ at: 0, noShift: true, k: .2, draw(cf, bf) { const tw = (bf + i) % 4 === 0 ? .6 : 1; ctx.save(); ctx.translate(x, y); ctx.scale(s * tw, s * tw); place(SPARK, 0, 0, 0, 0); ctx.restore(); } }); }
+  [[300, 470], [352, 474], [870, 470], [925, 466]].forEach(([x, y]) => add({ at: 0, noShift: true, k: .5, draw(cf, bf) {
+    ctx.fillStyle = (bf + x) % 7 ? '#ffd86a' : '#ffe9a8'; ctx.fillRect(x - 11, y - 20, 6, 6); ctx.fillRect(x + 5, y - 20, 6, 6); } }));
+}
+TSHIFT = 0;
+sukkah({ floor: DONE, postB1: DONE, postB2: DONE, beamB: DONE, postF1: DONE, postF2: DONE, beamS: DONE, beamF: DONE, wallB: DONE, wallL: DONE, wallR: DONE,
+  lights: DONE, lit: DONE, fronds: [DONE], banner: DONE, inside: () => {
+    insideDecor(DONE);
+    // הכוכב עולה מאחורי הסכך (נצבע לפני הענפים)
+    add({ at: L(4, 2), noShift: true, draw(cf, bf) {
+      const T = cf / FPS, u = clamp((cf - appearF(snap(L(4, 2, .1)))) / 6, 0, 1), big = T > L(4, 3) ? 1.25 + (bf % 2 ? .08 : 0) : 1;
+      ctx.save(); applyStretch(); ctx.translate(560 + SHIFT, 262 - u * 110); ctx.rotate(Math.sin(bf * .5) * .05); ctx.scale(big, big);
+      if (T > L(4, 3)) { const g = ctx.createRadialGradient(0, 0, 10, 0, 0, 150); g.addColorStop(0, 'rgba(255,240,170,.55)'); g.addColorStop(1, 'rgba(255,240,170,0)');
+        ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = g; ctx.fillRect(-150, -150, 300, 300); ctx.restore(); }
+      place(STAR, 0, 0, 0, .6); ctx.restore();
+    } });
+  } }, true);
+SC.stretch = () => 1.36;
+add({ at: 0, noShift: true, draw() { ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = '#8c95c6'; ctx.fillRect(-400, -300, W + 800, H + 600); ctx.restore(); } });
+lights(0, 0, true);                                                     // הנורות שוב מעל הגוון הכחול, שיזהרו
+add({ at: 0, noShift: true, draw(cf) {                               // אור חם מתוך הסוכה
+  const g = ctx.createRadialGradient(520, 470, 40, 520, 470, 430); g.addColorStop(0, 'rgba(255,200,110,.45)'); g.addColorStop(1, 'rgba(255,200,110,0)');
+  ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = .8 + (cf % 3) * .06; ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); ctx.restore(); } });
+for (let i = 0; i < 9; i++) { const a = i / 9 * Math.PI * 2; sparkle(440 + Math.cos(a) * rnd(90, 170), 190 + Math.sin(a) * rnd(60, 120), snap(L(4, 3, .05) + i * SONG.BEAT / 2), L(4, 4, .6), rnd(.6, 1.1)); }
+people.forEach((p, i) => crowdMember(p, 200 + i * 64 + (i % 2) * 10, 618 - (i % 2) * 10, 0, .78, L(4, 5)));
+kid(boy, 684, [{ from: 0, to: L(4, 5), pose: 'stand', x0: 1060 }, { from: L(4, 5), to: 999, pose: 'cheer', phase: 1 }]);
+kid(girl, 674, [{ from: 0, to: L(4, 5), pose: 'stand', x0: 1180 }, { from: L(4, 5), to: 999, pose: 'cheer' }]);
+kid(shlomit, 700, [{ from: 0, to: L(4, 2), pose: 'present', x0: 940 }, { from: L(4, 2), to: L(4, 5), pose: 'finger' }, { from: L(4, 5), to: 999, pose: 'cheer' }]);
+// כותרת הסיום בשמי הלילה
+layoutLine('שלומית בנתה', 86, 5).forEach(({ ch, x }, i) => {
+  const s = letterSprites(ch, x, 92, 86, PAPER[i % PAPER.length], '#fffaf0');
+  add({ spr: s.front, back: s.back, px: x, py: 92, at: snap(L(4, 6, .02)) + i * SONG.BEAT / 2, noShift: true, anim: 'flip', n: 3, rot0: rnd(-.09, .09), screen: true, bbw: { h: 0 } });
+});
+layoutLine('סוכת שלום', 96, 6).forEach(({ ch, x }, i) => {
+  const s = letterSprites(ch, x, 196, 96, PAPER[(i + 3) % PAPER.length], '#fffaf0');
+  add({ spr: s.front, back: s.back, px: x, py: 196, at: snap(L(4, 6, .45)) + i * SONG.BEAT / 2, noShift: true, anim: 'flip', n: 3, rot0: rnd(-.09, .09), screen: true, bbw: { h: 0 } });
+});
+dove(L(4, 6, .3), L(4, 6, .95), -120, 330, 1420, 250, 999, 80);
+{
+  const rb = sprite([P([[500, 632], [780, 632], [764, 664], [780, 696], [500, 696], [516, 664]], '#fff4dc', { amp: 1 })],
+    { after: g => { g.font = font(40); g.textAlign = 'center'; g.textBaseline = 'middle'; g.direction = 'rtl'; g.fillStyle = '#b83a2e'; g.fillText('חג שמח!', 640, 666); } });
+  add({ spr: rb, px: 640, py: 664, at: SONG.MUSIC_END - 2.2, noShift: true, anim: 'slide', from: [0, 200], screen: true, rot0: -.02, bbw: { h: 0 } });
+}
+SC.cam = [[0, 2.1, 480, 250], [L(4, 1, .3), 2.1, 480, 250], [L(4, 2, .9), 1.8, 480, 260], [L(4, 3, .9), 1.8, 480, 260], [L(4, 4, .6), 1, 640, 360], [999, 1, 640, 360]];
+}   // buildAll
+
+// ============================================================
+//  מעברים בין הסצנות (בחלון הנשימה בין הבתים)
+// ============================================================
+function sceneById(id) { return SCENES.find(s => s.id === id); }
+const TRANS = () => [
+  { a: 'title', b: 'build', at: 7.0, dur: 1.0, fn: rollUp },
+  { a: 'build', b: 'decor', at: 63.0, dur: 1.9, fn: pageTurn },
+  { a: 'decor', b: 'crowd', at: 105.1, dur: 2.9, fn: crumple },
+  { a: 'crowd', b: 'night', at: 146.9, dur: 2.9, fn: plane },
+];
+
+
+// ============================================================
+//  הרכבה: סצנה או מעבר, ואז "מצלמה" (גרעין, וינייטה, הבהוב)
+// ============================================================
+function renderScene(sc, f) {
+  const T = f / FPS; ctx = sc.g; shK = DPR;
+  STRETCH = sc.stretch ? sc.stretch(T) : 1;
+  const jr = mulberry32(f * 31 + 7), sk_ = sc.shake(T);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.fillStyle = sc.bg; ctx.fillRect(0, 0, W, H);
+  ctx.save(); ctx.translate((jr() - .5) * 1.6 * sk_ - 3, (jr() - .5) * 1.6 * sk_ - 3); ctx.scale((W + 6) / W, (H + 6) / H);
+  const cm = camAt(sc, T);
+  for (const p of sc.pieces) { ctx.save(); if (!p.screen) applyCam(cm, p.k); drawPiece(p, f, f); ctx.restore(); shK = DPR; }
+  ctx.restore();
+}
+const vignette = (() => { const g = mainCtx.createRadialGradient(640, 360, 250, 640, 360, 780);
+  g.addColorStop(0, 'rgba(60,30,0,0)'); g.addColorStop(1, 'rgba(50,25,0,0.42)'); return g; })();
+const grainPat = mainCtx.createPattern(TEX, 'repeat');
+let TR = [];
+function render(f) {
+  const T = f / FPS, tr = TR.find(t => T >= t.at && T < t.at + t.dur);
+  if (tr) {
+    const A = sceneById(tr.a), B = sceneById(tr.b);
+    renderScene(A, f); renderScene(B, f);
+    ctx = mainCtx; ctx.setTransform(DPR, 0, 0, DPR, 0, 0); table();
+    const n = Math.max(1, Math.round(tr.dur * FPS));
+    tr.fn(A.canvas, B.canvas, Math.min(1, (Math.floor((T - tr.at) * FPS + 1e-6) + 1) / n), f);
+  } else {
+    const sc = [...SCENES].reverse().find(s => T >= s.from) || SCENES[0];
+    renderScene(sc, f);
+    ctx = mainCtx; ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.drawImage(sc.canvas, 0, 0, W, H);
+  }
+  const jr = mulberry32(f * 31 + 7);
+  ctx.save(); ctx.globalAlpha = .42; ctx.translate(-Math.floor(jr() * 256), -Math.floor(jr() * 256));
+  ctx.fillStyle = grainPat; ctx.fillRect(0, 0, W + 256, H + 256); ctx.restore();
+  ctx.fillStyle = vignette; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = `rgba(30,15,0,${(jr() * .05).toFixed(3)})`; ctx.fillRect(0, 0, W, H);
+}
+
+// ============================================================
+//  ניגון עם השיר (קובץ מהמכשיר) או בלי קול
+// ============================================================
+const msg = document.getElementById('msg'), btnPlay = document.getElementById('play');
+const audio = new Audio(); audio.preload = 'auto';
+let audioReady = false, playing = false, t0 = 0, pausedAt = 0, last = -1;
+const nowT = () => audioReady ? audio.currentTime : (playing ? (performance.now() - t0) / 1000 : pausedAt);
+function tick() {
+  let T = nowT();
+  if (T >= SONG.END) { if (!audioReady) { t0 = performance.now(); T = 0; } }
+  const f = Math.floor(Math.min(T, SONG.END) * FPS);
+  if (f !== last) { last = f; render(f); }
+  requestAnimationFrame(tick);
+}
+btnPlay.onclick = () => {
+  if (audioReady) { if (audio.paused) audio.play().catch(() => {}); else audio.pause(); btnPlay.textContent = audio.paused ? '▶ נגן' : '⏸ השהה'; return; }
+  if (playing) { pausedAt = nowT(); playing = false; btnPlay.textContent = '▶ נגן'; }
+  else { t0 = performance.now() - pausedAt * 1000; playing = true; btnPlay.textContent = '⏸ השהה'; }
+};
+document.getElementById('restart').onclick = () => {
+  if (audioReady) { audio.currentTime = 0; audio.play().catch(() => {}); btnPlay.textContent = '⏸ השהה'; }
+  else { pausedAt = 0; t0 = performance.now(); playing = true; btnPlay.textContent = '⏸ השהה'; }
+};
+document.getElementById('song').onchange = async e => {
+  const file = e.target.files[0]; if (!file) return;
+  audio.src = URL.createObjectURL(file);
+  try { await new Promise((res, rej) => { audio.onloadedmetadata = res; audio.onerror = rej; }); }
+  catch { msg.textContent = 'לא הצלחתי לקרוא את הקובץ. נסו MP3 או M4A.'; return; }
+  audioReady = true; playing = false; audio.currentTime = 0;
+  audio.play().then(() => { btnPlay.textContent = '⏸ השהה'; }).catch(() => { btnPlay.textContent = '▶ נגן'; });
+  msg.textContent = 'השיר נטען. האנימציה מסונכרנת לשיר.';
+};
+
+Promise.race([Promise.all([document.fonts.load('84px "Secular One"'), document.fonts.load('28px Rubik')]).catch(() => {}), new Promise(r => setTimeout(r, 2000))]).then(() => {
+  buildAll(); TR = TRANS();
+  window.renderFrame = f => { render(f); return cv.toDataURL('image/jpeg', .92); };
+  const fz = new URLSearchParams(location.search).get('frame');
+  if (fz !== null) { render(+fz); window.__ready = true; return; }
+  window.__ready = true;
+  requestAnimationFrame(tick);
+});
+
+</script>
+</body>
+</html>
