@@ -2,3 +2,6 @@
 sukkah-animation/lyrics.js
 sukkah-animation/*.mp3
 sukkah-animation/fonts/
+sukkah-animation/tools/node_modules/
+sukkah-animation/tools/package-lock.json
+sukkah-animation/*.mp4.part

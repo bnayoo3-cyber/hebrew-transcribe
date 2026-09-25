@@ -1,0 +1,13 @@
+{
+  "name": "shlomit-render",
+  "private": true,
+  "type": "module",
+  "description": "רינדור אנימציית שלומית בונה סוכה לוידאו עם השיר",
+  "scripts": {
+    "render": "node render.mjs"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0",
+    "playwright": "^1.56.1"
+  }
+}
